@@ -1,22 +1,54 @@
 # Zerogotchi
 
-A Hello World app for the M5Stack Cardputer Zero. Select **Zerogotchi** in the stock launcher to open it, then press **Esc** to return.
+Zerogotchi is a Wi-Fi audit app for the M5Stack Cardputer Zero stock launcher.
+Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go back.
+**Auto** is reserved for future automatic auditing.
 
-## How the stock launcher finds apps
-
-M5Stack's APPLaunch watches `/usr/share/APPLaunch/applications/` for `.desktop` entries. Zerogotchi's entry names the executable with `Exec`, supplies the installed PNG path with `Icon`, and sets `Terminal=false` to launch it as a standalone process. APPLaunch pauses its own interface while the process runs and restores the carousel when it exits.
-
-Zerogotchi draws directly to the 320 × 170 RGB565 panel at `/dev/fb_lcd` and reads Esc from `/dev/input/cardputer-zero-internal`. The stock OS provides both device nodes and their permissions. The app runs as the launcher user. See the [APPLaunch application model](https://github.com/CardputerZero/launcher/blob/master/docs/launcher-project-guide/04-application-model-and-launch-mechanism.md).
-
-## Build and install on the Cardputer Zero
+## Install on the Cardputer Zero
 
 From a checkout on the Cardputer, run:
 
 ```sh
 make package
-sudo apt install ./build/zerogotchi_0.1.0_arm64.deb
+sudo apt install ./build/zerogotchi_0.2.0_all.deb
 ```
 
-The build uses a C compiler, Linux headers, GNU Make, and `dpkg-deb`. Install `build-essential` if the toolchain is missing. APPLaunch reloads its app list when the entry appears.
+The stock launcher detects the package's desktop entry in
+`/usr/share/APPLaunch/applications/` and adds Zerogotchi to its carousel.
+See the [APPLaunch application model](https://github.com/CardputerZero/launcher/blob/master/docs/launcher-project-guide/04-application-model-and-launch-mechanism.md).
 
-To remove the app, run `sudo apt remove zerogotchi`.
+## Attack mode
+
+Only test Wi-Fi networks and clients you own.
+
+1. Select **Attack**, accept the disclaimer, and scan for nearby networks.
+2. Connect a USB Wi-Fi adapter whose Linux driver supports monitor mode. For
+   deauthentication, the adapter must also support frame injection. Keep this
+   adapter disconnected from Wi-Fi and set its interface name in **Settings**.
+   Run `/usr/sbin/iw dev` over SSH to identify it. The onboard adapter on stock firmware
+   can scan but does not advertise monitor mode.
+3. Select the target BSSID. **Passive capture** listens on the selected frequency
+   for up to 25 seconds. **Deauth one client** sends two directed deauthentication
+   bursts during capture after you specify the authorized client's MAC and
+   confirm. Press **Esc** to stop capture early and save received packets.
+   Clients using Protected Management Frames may ignore injected deauth frames.
+4. Open **Saved captures** to see the result. Capture files are stored in
+   `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/captures/`. Zerogotchi retains the
+   PCAP and uses `hcxpcapngtool` to produce a target-filtered Hashcat mode 22000
+   file when the capture contains a usable WPA handshake or PMKID.
+
+Each capture asks for your sudo password with masked input. The app passes it
+to sudo through a pipe for that capture. The helper opens a temporary monitor
+interface on the dedicated USB radio, streams the capture to the app, then
+removes the monitor interface. Keep the onboard radio connected for SSH and
+uploads.
+
+## OnlineHashCrack
+
+Enter your key in **Settings**. The app masks typed characters and saves the key
+in a user-only file at `${XDG_CONFIG_HOME:-~/.config}/zerogotchi/api-key`.
+
+Choose **Submit WPA hashes** on a saved capture and accept the
+[OnlineHashCrack terms](https://www.onlinehashcrack.com/terms-conditions.php)
+before sending. The app sends mode 22000 records in batches of up to 50 and
+displays accepted, skipped, and rejected totals. PCAPs stay on the Cardputer.

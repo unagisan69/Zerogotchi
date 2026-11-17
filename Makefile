@@ -1,26 +1,25 @@
-CC ?= cc
-CFLAGS ?= -O2
-VERSION = 0.1.0
-ARCH = $(shell dpkg --print-architecture)
+VERSION = 0.2.0
+ARCH = all
 PACKAGE = build/zerogotchi_$(VERSION)_$(ARCH).deb
 STAGE = build/package
+SOURCES = app/zerogotchi app/wifi.py app/radio
+ASSETS = packaging/zerogotchi.desktop packaging/zerogotchi.png
 
 .PHONY: all package clean
-all: build/zerogotchi
-
-build/zerogotchi: zerogotchi.c
-	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -Wall -Wextra -Wpedantic $< $(LDFLAGS) -o $@
-
+all: package
 package: $(PACKAGE)
 
-$(PACKAGE): build/zerogotchi packaging/zerogotchi.desktop packaging/zerogotchi.png Makefile
+$(PACKAGE): $(SOURCES) $(ASSETS) Makefile
 	rm -rf $(STAGE)
-	install -Dm755 build/zerogotchi $(STAGE)/usr/bin/zerogotchi
+	install -Dm755 app/zerogotchi $(STAGE)/usr/lib/zerogotchi/zerogotchi
+	install -Dm755 app/radio $(STAGE)/usr/lib/zerogotchi/radio
+	install -Dm644 app/wifi.py $(STAGE)/usr/lib/zerogotchi/wifi.py
+	install -d -m755 $(STAGE)/usr/bin
+	ln -s ../lib/zerogotchi/zerogotchi $(STAGE)/usr/bin/zerogotchi
 	install -Dm644 packaging/zerogotchi.png $(STAGE)/usr/share/APPLaunch/share/images/zerogotchi.png
 	install -Dm644 packaging/zerogotchi.desktop $(STAGE)/usr/share/APPLaunch/applications/zerogotchi.desktop
-	mkdir -p $(STAGE)/DEBIAN
-	printf '%s\n' 'Package: zerogotchi' 'Version: $(VERSION)' 'Architecture: $(ARCH)' 'Maintainer: Zerogotchi contributors' 'Depends: libc6' 'Description: Zerogotchi Hello World for Cardputer Zero' > $(STAGE)/DEBIAN/control
+	install -d -m755 $(STAGE)/DEBIAN
+	printf '%s\n' 'Package: zerogotchi' 'Version: $(VERSION)' 'Architecture: $(ARCH)' 'Maintainer: Zerogotchi contributors' 'Depends: python3, python3-pil, fonts-dejavu-core, network-manager, sudo, iw, iproute2, tcpdump, aircrack-ng, hcxtools' 'Description: Wi-Fi auditing for the M5Stack Cardputer Zero' > $(STAGE)/DEBIAN/control
 	dpkg-deb --root-owner-group --build $(STAGE) $@
 
 clean:

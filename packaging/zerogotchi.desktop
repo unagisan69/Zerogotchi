@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Zerogotchi
-Comment=Hello World for Cardputer Zero
+Comment=Wi-Fi auditing for Cardputer Zero
 Exec=/usr/bin/zerogotchi
 Icon=/usr/share/APPLaunch/share/images/zerogotchi.png
 Terminal=false

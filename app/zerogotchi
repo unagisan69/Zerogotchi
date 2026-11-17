@@ -1,0 +1,341 @@
+#!/usr/bin/python3
+"""Zerogotchi's native Cardputer Zero launcher UI."""
+
+import concurrent.futures
+import fcntl
+import os
+import re
+import select
+import struct
+import threading
+
+from PIL import Image, ImageDraw, ImageFont
+
+import wifi
+
+
+WIDTH, HEIGHT = 320, 170
+BG, PANEL, TEAL, WHITE, MUTED = "#101c25", "#234145", "#6fffc1", "#f4f9fa", "#aebfc5"
+FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+INPUT_EVENT = struct.Struct("@llHHi")
+KEY_ESC, KEY_ENTER, KEY_UP, KEY_DOWN, KEY_BACKSPACE = 1, 28, 103, 108, 14
+KEYS = {
+    **dict(enumerate("1234567890-=", 2)),
+    **dict(enumerate("qwertyuiop[]", 16)),
+    **dict(enumerate("asdfghjkl;'`", 30)),
+    **dict(enumerate("zxcvbnm,./", 44)),
+    57: " ",
+}
+SHIFTED = dict(zip("1234567890-=;',./[]`", "!@#$%^&*()_+:\"<>?{}~"))
+USB_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}")
+
+
+class Display:
+    def __init__(self, device):
+        self.fd = device.fileno()
+        mode = bytearray(160)
+        fixed = bytearray(80)
+        fcntl.ioctl(self.fd, 0x4600, mode)
+        fcntl.ioctl(self.fd, 0x4602, fixed)
+        width, height, _, _, xoffset, yoffset, bpp = struct.unpack_from("=7I", mode)
+        red, green, blue = (struct.unpack_from("=2I", mode, offset) for offset in (32, 44, 56))
+        stride = struct.unpack_from("=I", fixed, 48)[0]
+        if (width, height, bpp, red, green, blue) != (320, 170, 16, (11, 5), (5, 6), (0, 5)):
+            raise OSError("Expected Cardputer Zero RGB565 LCD")
+        if stride < (xoffset + WIDTH) * 2:
+            raise OSError("Invalid LCD line length")
+        self.stride = stride
+        self.offset = yoffset * stride + xoffset * 2
+        self.title = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 18)
+        self.body = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 13)
+        self.small = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 11)
+
+    def wrap(self, text, draw):
+        for paragraph in text.splitlines():
+            if not paragraph:
+                yield ""
+                continue
+            line = ""
+            for word in paragraph.split():
+                candidate = (line + " " + word).strip()
+                if line and draw.textlength(candidate, font=self.body) > 292:
+                    yield line
+                    line = word
+                else:
+                    line = candidate
+            if line:
+                yield line
+
+    def draw(self, title, message, items, index, footer):
+        image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        draw = ImageDraw.Draw(image)
+        draw.text((12, 8), title, font=self.title, fill=TEAL)
+        draw.line((12, 33, 308, 33), fill=PANEL)
+        y = 40
+        for line in self.wrap(message, draw):
+            draw.text((13, y), line, font=self.body, fill=WHITE)
+            y += 16
+        window = max(1, (147 - y) // 21)
+        first = min(max(0, index - window + 1), max(0, len(items) - window))
+        for i in range(first, min(len(items), first + window)):
+            label = items[i][0]
+            if i == index:
+                draw.rounded_rectangle((9, y, 310, y + 19), radius=4, fill=PANEL)
+            if draw.textlength(label, font=self.body) > 281:
+                while draw.textlength(label + "…", font=self.body) > 281:
+                    label = label[:-1]
+                label += "…"
+            draw.text((15, y + 1), label, font=self.body, fill=TEAL if i == index else WHITE)
+            y += 21
+        draw.text((12, 151), footer, font=self.small, fill=MUTED)
+        raw = struct.pack(f"<{WIDTH * HEIGHT}H", *(
+            (red >> 3) << 11 | (green >> 2) << 5 | blue >> 3
+            for red, green, blue in image.getdata()
+        ))
+        for row in range(HEIGHT):
+            start = row * WIDTH * 2
+            if os.pwrite(self.fd, raw[start:start + WIDTH * 2], self.offset + row * self.stride) != WIDTH * 2:
+                raise OSError("Short LCD write")
+
+
+class App:
+    def __init__(self, display, keyboard, executor):
+        self.display = display
+        self.keyboard = keyboard
+        self.executor = executor
+        self.cancel = threading.Event()
+        self.future = None
+        self.editor = None
+        self.running = True
+        self.shift = set()
+        self.home()
+
+    def screen(self, title, message="", items=(), back=None, footer=None):
+        self.title, self.message, self.items = title, message, items
+        self.index, self.back, self.footer = 0, back, footer
+        self.dirty = True
+
+    def home(self):
+        self.screen("Zerogotchi", items=(
+            ("Auto", self.auto), ("Attack", self.disclaimer), ("About", self.about),
+            ("Settings", self.settings), ("Exit", self.exit),
+        ), back=self.exit)
+
+    def auto(self):
+        self.screen("Auto", "Automatic Wi-Fi auditing is planned.", back=self.home)
+
+    def about(self):
+        self.screen("About", "Zerogotchi is a Wi-Fi audit tool for Cardputer Zero. "
+                    "It finds nearby networks, captures WPA exchanges on authorized networks, "
+                    "and can submit saved hashes to OnlineHashCrack.", back=self.home)
+
+    def exit(self):
+        self.running = False
+
+    def disclaimer(self):
+        self.screen("Authorized use only",
+                    "Only test Wi-Fi networks you own. Deauthentication can disconnect a device.",
+                    (("Okay", self.attack), ("Cancel", self.home)), self.home)
+
+    def attack(self):
+        self.screen("Attack", items=(
+            ("Scan nearby networks", self.start_scan), ("Saved captures", self.saved),
+        ), back=self.home)
+
+    def start_scan(self):
+        self.work("Scanning", "Looking for nearby Wi-Fi networks…", wifi.scan,
+                  self.networks, self.attack)
+
+    def networks(self, networks):
+        self.screen("Nearby networks", "" if networks else "No Wi-Fi networks found.", tuple(
+            (f"{network.signal:>3}%  {self.network_name(network)}",
+             lambda network=network: self.target(network, networks)) for network in networks
+        ), self.attack)
+
+    @staticmethod
+    def network_name(network):
+        return "".join(char if char.isprintable() else " " for char in network.ssid) or "(hidden SSID)"
+
+    def target(self, network, networks):
+        back = lambda: self.networks(networks)
+        target = lambda: self.target(network, networks)
+        self.screen("Selected network",
+                    f"{self.network_name(network)}\n{network.bssid}  •  {network.frequency} MHz\n"
+                    f"{network.security or 'Open'}",
+                    (("Passive capture", lambda: self.start_capture(network, None, target)),
+                     ("Deauth one client", lambda: self.client(network, target))), back)
+
+    def client(self, network, back):
+        def confirm(client):
+            self.screen("Confirm deauth", f"Disconnect {client} from\n{network.bssid}?",
+                        (("Deauth and capture", lambda: self.start_capture(network, client, back)),),
+                        back)
+        self.edit("Client MAC address", "Enter the MAC of a client you own.", wifi.MAC_PATTERN,
+                  17, confirm, back)
+
+    def start_capture(self, network, client, back):
+        adapter = wifi.read_setting("adapter")
+        if not adapter:
+            self.screen("Capture adapter required", "Set your USB Wi-Fi adapter in Settings.", back=back)
+            return
+
+        def authenticate(password):
+            self.work("Capturing", "Listening for WPA exchanges. Press Esc to stop and save.",
+                      lambda: wifi.capture(network, adapter, client, password, self.cancel),
+                      lambda result: self.capture_done(result, back), back, cancellable=True)
+
+        self.edit("Admin password", "Authorize radio access for this capture.",
+                  re.compile(r"[ -~]{1,256}"), 256, authenticate, back, masked=True)
+
+    def capture_done(self, result, back):
+        _, hashes, warning = result
+        message = "PCAP and WPA hash file saved." if hashes else "PCAP saved. No usable WPA handshake or PMKID."
+        if warning:
+            message += " Deauth failed or was interrupted."
+        items = (("Submit WPA hashes", lambda: self.terms(hashes, self.saved)),) if hashes else ()
+        self.screen("Capture complete", message, items, back)
+
+    def saved(self):
+        captures = wifi.saved_captures()
+        self.screen("Saved captures", "" if captures else "No captures saved.", tuple(
+            (path.parent.name, lambda path=path: self.details(path))
+            for path in captures
+        ), self.attack)
+
+    def details(self, path):
+        hashes = path.with_suffix(".22000")
+        self.screen("Saved capture", path.parent.name + "\n" +
+                    ("PCAP and WPA hash file" if hashes.exists() else "PCAP only"),
+                    (("Submit WPA hashes", lambda: self.terms(hashes, self.saved)),)
+                    if hashes.exists() else (), self.saved)
+
+    def terms(self, path, back):
+        self.screen("Submit to OnlineHashCrack",
+                    "To proceed, confirm you have read and accepted the service terms and "
+                    "authorize sending these WPA hashes.\nwww.onlinehashcrack.com/terms-conditions.php",
+                    (("Accept and submit", lambda: self.send(path, back)),), back)
+
+    def send(self, path, back):
+        self.work("Submitting", "Sending WPA hashes to OnlineHashCrack…", lambda: wifi.upload(path),
+                  lambda summary: self.screen("Submission result", summary, back=back), back)
+
+    def settings(self):
+        is_set = bool(wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")))
+        adapter = wifi.read_setting("adapter")
+        self.screen("Settings", items=(
+            (f"Capture adapter: {adapter or 'unset'}", self.adapter),
+            (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
+        ), back=self.home)
+
+    def adapter(self):
+        def save(value):
+            wifi.save_setting("adapter", value)
+            self.settings()
+        self.edit("Capture adapter", "Enter the interface name of a dedicated USB Wi-Fi adapter.",
+                  USB_NAME, 15, save, self.settings, initial=wifi.read_setting("adapter"))
+
+    def api_key(self):
+        def save(value):
+            wifi.save_setting("api-key", value)
+            self.settings()
+        self.edit("OnlineHashCrack key", "Enter your API key. Characters are hidden.",
+                  wifi.KEY_PATTERN, 67, save, self.settings, masked=True)
+
+    def edit(self, title, prompt, pattern, limit, commit, back, *, initial="", masked=False):
+        self.editor = {
+            "title": title, "prompt": prompt, "pattern": pattern, "limit": limit,
+            "commit": commit, "back": back, "value": initial, "masked": masked,
+        }
+        self.update_editor()
+
+    def update_editor(self, feedback=""):
+        editor = self.editor
+        value = editor["value"]
+        field = f"•  {len(value)} characters" if editor["masked"] else (value or "▌")
+        self.screen(editor["title"], editor["prompt"] + "\n\n" + field + "\n" + feedback,
+                    footer="Enter Save   /   Esc Cancel")
+
+    def edit_key(self, key):
+        editor = self.editor
+        value = editor["value"]
+        if key == KEY_ESC:
+            self.editor = None
+            editor["back"]()
+        elif key == KEY_ENTER:
+            if not editor["pattern"].fullmatch(value):
+                self.update_editor("Invalid format")
+                return
+            self.editor = None
+            try:
+                editor["commit"](value)
+            except OSError:
+                self.screen("Could not save setting", back=editor["back"])
+        elif key == KEY_BACKSPACE:
+            editor["value"] = value[:-1]
+            self.update_editor()
+        elif key in KEYS and len(value) < editor["limit"]:
+            char = KEYS[key]
+            editor["value"] += SHIFTED.get(char, char.upper()) if self.shift else char
+            self.update_editor()
+
+    def work(self, title, prompt, operation, success, back, *, cancellable=False):
+        self.cancel.clear()
+        self.future = self.executor.submit(operation)
+        self.finished, self.failed = success, back
+        self.cancellable = cancellable
+        self.screen(title, prompt, footer="Esc Stop and save" if cancellable else "Please wait")
+
+    def key(self, code, state):
+        if code in (42, 54):
+            self.shift.add(code) if state else self.shift.discard(code)
+        if state != 1:
+            return
+        if self.future:
+            if self.cancellable and code == KEY_ESC:
+                self.cancel.set()
+                self.screen("Finishing capture", "Saving received packets…", footer="Please wait")
+        elif self.editor:
+            self.edit_key(code)
+        elif code == KEY_ESC and self.back:
+            self.back()
+        elif self.items and code in (KEY_UP, KEY_DOWN, 33, 45):
+            self.index = (self.index + (-1 if code in (KEY_UP, 33) else 1)) % len(self.items)
+            self.dirty = True
+        elif self.items and code == KEY_ENTER:
+            self.items[self.index][1]()
+
+    def run(self):
+        try:
+            while self.running:
+                if self.future and self.future.done():
+                    future, self.future = self.future, None
+                    try:
+                        self.finished(future.result())
+                    except wifi.WifiError as error:
+                        self.screen("Zerogotchi", str(error), back=self.failed)
+                    except OSError:
+                        self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
+                if self.dirty:
+                    footer = self.footer
+                    if footer is None:
+                        footer = "F/X Move   /   Enter Select   /   Esc Back" if self.items else "Esc Back"
+                    self.display.draw(self.title, self.message, self.items, self.index, footer)
+                    self.dirty = False
+                if select.select([self.keyboard], [], [], 0.15)[0]:
+                    event = self.keyboard.read(INPUT_EVENT.size)
+                    if len(event) != INPUT_EVENT.size:
+                        raise OSError("Could not read built-in keyboard")
+                    _, _, kind, code, state = INPUT_EVENT.unpack(event)
+                    if kind == 1:
+                        self.key(code, state)
+        finally:
+            self.cancel.set()
+
+
+if __name__ == "__main__":
+    with (
+        open("/dev/fb_lcd", "r+b", buffering=0) as lcd,
+        open("/dev/input/cardputer-zero-internal", "rb", buffering=0) as keyboard,
+        concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        App(Display(lcd), keyboard, executor).run()
