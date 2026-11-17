@@ -10,7 +10,7 @@ From a checkout on the Cardputer, run:
 
 ```sh
 make package
-sudo apt install ./build/zerogotchi_0.2.0_all.deb
+sudo apt install ./build/zerogotchi_0.2.1_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -38,10 +38,11 @@ Only test Wi-Fi networks and clients you own.
    file when the capture contains a usable WPA handshake or PMKID.
 
 Each capture asks for your sudo password with masked input. The app passes it
-to sudo through a pipe for that capture. The helper opens a temporary monitor
-interface on the dedicated USB radio, streams the capture to the app, then
-removes the monitor interface. Keep the onboard radio connected for SSH and
-uploads.
+to sudo through a pipe for that capture. The helper brings down idle managed
+interfaces on the dedicated USB radio, opens a temporary monitor interface,
+and streams the capture to the app. It then removes the monitor interface and
+restores the original interface state. Keep the onboard radio connected for SSH
+and uploads.
 
 ## OnlineHashCrack
 

@@ -40,6 +40,7 @@ def dedicated_phy(interface):
     if not any((parent / "subsystem").resolve().name == "usb" for parent in device.resolve().parents):
         raise RadioError("Use a dedicated USB Wi-Fi adapter")
     phy = phy.resolve()
+    active_links = []
     for link in net.iterdir():
         if (link / "phy80211").resolve() != phy:
             continue
@@ -47,10 +48,12 @@ def dedicated_phy(interface):
         status = command(IW, "dev", link.name, "link", check=False).stdout
         if "type managed" not in state or status.strip() != "Not connected.":
             raise RadioError("Disconnect the USB adapter first")
+        if int((link / "flags").read_text(), 16) & 1:
+            active_links.append(link.name)
     modes = command(IW, "phy", phy.name, "info").stdout
     if not re.search(r"^\s*\* monitor\s*$", modes, re.MULTILINE):
         raise RadioError("The USB adapter lacks monitor mode")
-    return phy.name
+    return phy.name, active_links
 
 
 def stop(process, sig):
@@ -66,11 +69,15 @@ def stop(process, sig):
 
 
 def collect(interface, freq, bssid, client):
-    phy = dedicated_phy(interface)
+    phy, active_links = dedicated_phy(interface)
     monitor = f"zgmon{os.getpid()}"
     created = False
+    restore_links = []
     capture = injection = None
     try:
+        for link in active_links:
+            command(IP, "link", "set", "dev", link, "down")
+            restore_links.append(link)
         command(IW, "phy", phy, "interface", "add", monitor, "type", "monitor")
         created = True
         command(IP, "link", "set", "dev", monitor, "up")
@@ -97,8 +104,12 @@ def collect(interface, freq, bssid, client):
     finally:
         stop(injection, signal.SIGTERM)
         stop(capture, signal.SIGINT)
-        if created:
-            command(IW, "dev", monitor, "del")
+        try:
+            if created:
+                command(IW, "dev", monitor, "del")
+        finally:
+            for link in restore_links:
+                command(IP, "link", "set", "dev", link, "up")
 
 
 def main(args):
