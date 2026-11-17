@@ -8,6 +8,7 @@ import re
 import select
 import struct
 import threading
+import time
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -88,13 +89,21 @@ class Display:
             draw.text((15, y + 1), label, font=self.body, fill=TEAL if i == index else WHITE)
             y += 21
         draw.text((12, 151), footer, font=self.small, fill=MUTED)
-        raw = struct.pack(f"<{WIDTH * HEIGHT}H", *(
+        self.frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
             (red >> 3) << 11 | (green >> 2) << 5 | blue >> 3
             for red, green, blue in image.getdata()
         ))
+        self.present()
+
+    def present(self):
+        if self.stride == WIDTH * 2:
+            if os.pwrite(self.fd, self.frame, self.offset) != len(self.frame):
+                raise OSError("Short LCD write")
+            return
         for row in range(HEIGHT):
             start = row * WIDTH * 2
-            if os.pwrite(self.fd, raw[start:start + WIDTH * 2], self.offset + row * self.stride) != WIDTH * 2:
+            data = self.frame[start:start + WIDTH * 2]
+            if os.pwrite(self.fd, data, self.offset + row * self.stride) != len(data):
                 raise OSError("Short LCD write")
 
 
@@ -305,6 +314,9 @@ class App:
             self.items[self.index][1]()
 
     def run(self):
+        # Repaint through the initial framebuffer handoff from APPLaunch.
+        repaint_until = time.monotonic() + 2.0
+        last_paint = 0.0
         try:
             while self.running:
                 if self.future and self.future.done():
@@ -315,12 +327,17 @@ class App:
                         self.screen("Zerogotchi", str(error), back=self.failed)
                     except OSError:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
+                now = time.monotonic()
                 if self.dirty:
                     footer = self.footer
                     if footer is None:
                         footer = "F/X Move   /   Enter Select   /   Esc Back" if self.items else "Esc Back"
                     self.display.draw(self.title, self.message, self.items, self.index, footer)
                     self.dirty = False
+                    last_paint = now
+                elif now < repaint_until and now - last_paint >= 0.25:
+                    self.display.present()
+                    last_paint = now
                 if select.select([self.keyboard], [], [], 0.15)[0]:
                     event = self.keyboard.read(INPUT_EVENT.size)
                     if len(event) != INPUT_EVENT.size:

@@ -10,7 +10,7 @@ From a checkout on the Cardputer, run:
 
 ```sh
 make package
-sudo apt install ./build/zerogotchi_0.2.1_all.deb
+sudo apt install ./build/zerogotchi_0.2.2_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
