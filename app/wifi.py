@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -95,43 +96,47 @@ def save_setting(name, value):
             temporary.unlink(missing_ok=True)
 
 
-def convert(pcap):
-    output = pcap.with_suffix(".22000")
-    try:
-        subprocess.run(
-            ["hcxpcapngtool", "-o", str(output), str(pcap)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=True,
-        )
-        if output.exists():
-            bssid = pcap.parent.name.split("-")[0].lower()
-            target_hashes = [
-                line for line in output.read_text(encoding="ascii").splitlines()
-                if (fields := line.split("*"))[:2] in (["WPA", "01"], ["WPA", "02"])
-                and len(fields) > 3 and fields[3].lower() == bssid
-            ]
-            if target_hashes:
-                output.write_text("\n".join(dict.fromkeys(target_hashes)) + "\n", encoding="ascii")
-                return output
-            output.unlink()
-        return None
-    except (subprocess.SubprocessError, OSError, UnicodeError) as error:
-        output.unlink(missing_ok=True)
-        raise WifiError("Conversion failed. Capture saved.") from error
+def extract_hashes(pcap, bssid, output, timeout):
+    output.unlink(missing_ok=True)
+    subprocess.run(
+        ["hcxpcapngtool", "-o", str(output), str(pcap)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout, check=True,
+    )
+    if not output.exists():
+        return []
+    return list(dict.fromkeys(
+        line for line in output.read_text(encoding="ascii").splitlines()
+        if (fields := line.split("*"))[:2] in (["WPA", "01"], ["WPA", "02"])
+        and len(fields) > 3 and fields[3].lower() == bssid
+    ))
 
 
-def capture(network, interface, client, password, cancel):
+def hash_kind(hashes):
+    return "WPA handshake" if any(line.startswith("WPA*02*") for line in hashes) else "PMKID"
+
+
+def capture(network, interface, mode, password, cancel, report):
     if not interface:
         raise WifiError("Set capture adapter in Settings")
-    CAPTURES.mkdir(mode=0o700, parents=True, exist_ok=True)
-    folder = Path(tempfile.mkdtemp(prefix=network.bssid.replace(":", "") + "-", dir=CAPTURES))
-    pcap = folder / "capture.pcap"
-    prompt = "ZEROGOTCHI_SUDO:"
-    args = ["sudo", "-Sk", "-p", prompt, "--", HELPER, interface, str(network.frequency), network.bssid]
-    if client:
-        args.append(client)
+    bssid = network.bssid.replace(":", "").lower()
+    folder = None
+    if mode != "deauth":
+        CAPTURES.mkdir(mode=0o700, parents=True, exist_ok=True)
+        folder = Path(tempfile.mkdtemp(prefix=bssid.upper() + "-", dir=CAPTURES))
+    pcap = folder / "capture.pcap" if folder else None
+    prompt = b"ZEROGOTCHI_SUDO:"
+    args = ["sudo", "-Sk", "-p", prompt.decode(), "--", HELPER,
+            interface, str(network.frequency), network.bssid, mode]
+    hashes = []
     try:
-        with pcap.open("xb") as output, tempfile.TemporaryFile() as errors:
-            os.chmod(pcap, 0o600)
+        with (
+            open(pcap or os.devnull, "xb" if pcap else "wb") as output,
+            tempfile.TemporaryFile() as errors,
+            tempfile.TemporaryDirectory() as scratch,
+        ):
+            if pcap:
+                os.fchmod(output.fileno(), 0o600)
+            probe = Path(scratch) / "probe.22000"
             process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=output, stderr=errors)
             with process:
                 try:
@@ -139,34 +144,93 @@ def capture(network, interface, client, password, cancel):
                     process.stdin.flush()
                 except BrokenPipeError:
                     pass
-                while process.poll() is None and not cancel.wait(0.2):
-                    if os.pread(errors.fileno(), 4096, 0).count(prompt.encode()) > 1:
-                        break
+                started = time.monotonic()
+                next_probe = started + 2
+                scanned_size = 0
+                radio = "Preparing USB adapter…"
                 try:
-                    process.stdin.close()
-                except BrokenPipeError:
-                    pass
+                    while process.poll() is None and not cancel.wait(0.2):
+                        if os.pread(errors.fileno(), 4096, 0).count(prompt) > 1:
+                            break
+                        now = time.monotonic()
+                        end = os.fstat(errors.fileno()).st_size
+                        tail = os.pread(errors.fileno(), 4096, max(0, end - 4096))
+                        statuses = [line[10:] for line in tail.decode(errors="replace").splitlines()
+                                    if line.startswith("ZG STATUS ")]
+                        if statuses:
+                            radio = statuses[-1].replace(" | ", "\n")
+                        size = os.fstat(output.fileno()).st_size if pcap else 0
+                        state = f"\nCaptured: {size // 1024} KiB\nWaiting for handshake or PMKID" if pcap else ""
+                        report(f"{int(now-started)}s elapsed\n{radio}{state}")
+                        if pcap and size > max(24, scanned_size) and now >= next_probe:
+                            scanned_size, next_probe = size, now + 3
+                            try:
+                                hashes = extract_hashes(pcap, bssid, probe, timeout=5)
+                            except (OSError, UnicodeError, subprocess.SubprocessError):
+                                # The capture can grow while the converter reads its final record.
+                                continue
+                            if hashes:
+                                report(hash_kind(hashes) + " captured. Saving files…")
+                                break
+                finally:
+                    try:
+                        process.stdin.close()
+                    except BrokenPipeError:
+                        pass
                 status = process.wait()
-            errors.seek(0)
-            detail = errors.read(2048).decode(errors="replace")
-        if pcap.stat().st_size <= 24:
-            pcap.unlink()
-            folder.rmdir()
-            if cancel.is_set():
-                raise WifiError("Capture canceled")
-            if "ZEROGOTCHI:" in detail:
-                raise WifiError(detail.split("ZEROGOTCHI:", 1)[1].splitlines()[0].strip())
-            if prompt in detail and status:
-                raise WifiError("Admin authentication failed")
-            raise WifiError("No packets. Check capture adapter")
+            end = os.fstat(errors.fileno()).st_size
+            detail = os.pread(errors.fileno(), 8192, max(0, end - 8192)).decode(errors="replace")
         if status:
-            raise WifiError("Capture interrupted. PCAP saved.")
-        return pcap, convert(pcap), "Deauth failed" in detail
+            error = next((line.removeprefix("ZEROGOTCHI: ").strip()
+                          for line in detail.splitlines() if "ZEROGOTCHI: " in line), "")
+            if prompt.decode() in detail and not error:
+                error = "User password authentication failed"
+            if pcap and pcap.stat().st_size > 24:
+                (folder / "network.json").write_text(json.dumps({"ssid": network.ssid}), encoding="utf-8")
+                error = (error or "Capture interrupted") + ". PCAP saved."
+            raise WifiError(error or "Radio session failed")
+        if not pcap:
+            return None, None, ""
+        if pcap.stat().st_size <= 24:
+            raise WifiError("Stopped. No packets were captured.")
+        (folder / "network.json").write_text(json.dumps({"ssid": network.ssid}), encoding="utf-8")
+        if not hashes:
+            with tempfile.TemporaryDirectory() as scratch:
+                try:
+                    hashes = extract_hashes(pcap, bssid, Path(scratch) / "final.22000", timeout=15)
+                except (OSError, UnicodeError, subprocess.SubprocessError) as error:
+                    raise WifiError("Hash conversion failed. PCAP saved.") from error
+        if not hashes:
+            return pcap, None, ""
+        hashfile = pcap.with_suffix(".22000")
+        hashfile.write_text("\n".join(hashes) + "\n", encoding="ascii")
+        return pcap, hashfile, hash_kind(hashes)
     except (OSError, subprocess.SubprocessError) as error:
-        if pcap.exists() and pcap.stat().st_size <= 24:
-            pcap.unlink()
+        raise WifiError("Radio session failed. Check adapter and permissions") from error
+    finally:
+        if pcap and (not pcap.exists() or pcap.stat().st_size <= 24):
+            pcap.unlink(missing_ok=True)
             folder.rmdir()
-        raise WifiError("Capture failed. Check adapter and permissions") from error
+
+
+def capture_name(path):
+    try:
+        ssid = json.loads((path.parent / "network.json").read_text(encoding="utf-8"))["ssid"]
+    except (OSError, ValueError, KeyError):
+        # Older captures contain the AP beacon but have no saved metadata.
+        raw_bssid = path.parent.name.split("-")[0]
+        bssid = ":".join(raw_bssid[i:i + 2] for i in range(0, len(raw_bssid), 2))
+        try:
+            result = subprocess.run(
+                ["tcpdump", "-nn", "-r", str(path), "-c", "1",
+                 f"type mgt subtype beacon and wlan addr2 {bssid}"],
+                capture_output=True, text=True, errors="replace", timeout=2,
+            )
+            match = re.search(r"Beacon \((.*?)\)", result.stdout)
+            ssid = match[1] if match else ""
+        except (OSError, subprocess.SubprocessError):
+            ssid = ""
+    return "".join(char if char.isprintable() else " " for char in ssid) or "(unknown or hidden network)"
 
 
 def saved_captures():

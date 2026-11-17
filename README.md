@@ -10,7 +10,7 @@ From a checkout on the Cardputer, run:
 
 ```sh
 make package
-sudo apt install ./build/zerogotchi_0.2.2_all.deb
+sudo apt install ./build/zerogotchi_0.3.0_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -27,17 +27,23 @@ Only test Wi-Fi networks and clients you own.
    adapter disconnected from Wi-Fi and set its interface name in **Settings**.
    Run `/usr/sbin/iw dev` over SSH to identify it. The onboard adapter on stock firmware
    can scan but does not advertise monitor mode.
-3. Select the target BSSID. **Passive capture** listens on the selected frequency
-   for up to 25 seconds. **Deauth one client** sends two directed deauthentication
-   bursts during capture after you specify the authorized client's MAC and
-   confirm. Press **Esc** to stop capture early and save received packets.
-   Clients using Protected Management Frames may ignore injected deauth frames.
-4. Open **Saved captures** to see the result. Capture files are stored in
-   `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/captures/`. Zerogotchi retains the
-   PCAP and uses `hcxpcapngtool` to produce a target-filtered Hashcat mode 22000
-   file when the capture contains a usable WPA handshake or PMKID.
+3. Select the target BSSID and choose a mode:
 
-Each capture asks for your sudo password with masked input. The app passes it
+   - **Passive Capture** listens for authentication exchanges.
+   - **Deauth Attack** repeatedly sends directed deauthentication bursts to
+     recently observed clients of that BSSID, until you press **Esc**.
+   - **Active Capture** runs directed deauthentication and capture together.
+
+   Capture modes show live progress and stop when a usable handshake or PMKID
+   is detected, or when you press **Esc**. Clients using Protected Management
+   Frames may ignore injected deauth frames.
+
+4. **Saved captures** shows each network's SSID. Files are stored in
+   `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/captures/`. Zerogotchi keeps the
+   PCAP and uses `hcxpcapngtool` to save target-filtered Hashcat mode 22000
+   records when a usable exchange is found.
+
+Each radio session asks for your Cardputer user password with masked input. The app passes it
 to sudo through a pipe for that capture. The helper brings down idle managed
 interfaces on the dedicated USB radio, opens a temporary monitor interface,
 and streams the capture to the app. It then removes the monitor interface and
@@ -49,7 +55,8 @@ and uploads.
 Enter your key in **Settings**. The app masks typed characters and saves the key
 in a user-only file at `${XDG_CONFIG_HOME:-~/.config}/zerogotchi/api-key`.
 
-Choose **Submit WPA hashes** on a saved capture and accept the
+With a key saved, Zerogotchi asks whether to upload after capturing a usable
+handshake or PMKID. You can also choose **Submit WPA hashes** on a saved capture. Accept the
 [OnlineHashCrack terms](https://www.onlinehashcrack.com/terms-conditions.php)
 before sending. The app sends mode 22000 records in batches of up to 50 and
 displays accepted, skipped, and rejected totals. PCAPs stay on the Cardputer.

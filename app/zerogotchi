@@ -169,54 +169,65 @@ class App:
         back = lambda: self.networks(networks)
         target = lambda: self.target(network, networks)
         self.screen("Selected network",
-                    f"{self.network_name(network)}\n{network.bssid}  •  {network.frequency} MHz\n"
-                    f"{network.security or 'Open'}",
-                    (("Passive capture", lambda: self.start_capture(network, None, target)),
-                     ("Deauth one client", lambda: self.client(network, target))), back)
+                    f"{self.network_name(network)}  •  {network.security or 'Open'}\n"
+                    f"{network.bssid}  •  {network.frequency} MHz",
+                    (("Passive Capture", lambda: self.start_capture(network, "passive", target)),
+                     ("Deauth Attack", lambda: self.confirm_attack(network, "deauth", target)),
+                     ("Active Capture", lambda: self.confirm_attack(network, "active", target))), back)
 
-    def client(self, network, back):
-        def confirm(client):
-            self.screen("Confirm deauth", f"Disconnect {client} from\n{network.bssid}?",
-                        (("Deauth and capture", lambda: self.start_capture(network, client, back)),),
-                        back)
-        self.edit("Client MAC address", "Enter the MAC of a client you own.", wifi.MAC_PATTERN,
-                  17, confirm, back)
+    def confirm_attack(self, network, mode, back):
+        title = "Active Capture" if mode == "active" else "Deauth Attack"
+        self.screen(title, f"Disconnect discovered clients on {self.network_name(network)}?\n{network.bssid}",
+                    (("Start", lambda: self.start_capture(network, mode, back)),
+                     ("Cancel", back)), back)
 
-    def start_capture(self, network, client, back):
+    def start_capture(self, network, mode, back):
         adapter = wifi.read_setting("adapter")
         if not adapter:
             self.screen("Capture adapter required", "Set your USB Wi-Fi adapter in Settings.", back=back)
             return
 
         def authenticate(password):
-            self.work("Capturing", "Listening for WPA exchanges. Press Esc to stop and save.",
-                      lambda: wifi.capture(network, adapter, client, password, self.cancel),
+            title = {"passive": "Passive Capture", "active": "Active Capture", "deauth": "Deauth Attack"}[mode]
+            self.work(title, "Preparing USB adapter…",
+                      lambda: wifi.capture(network, adapter, mode, password, self.cancel, self.report_capture),
                       lambda result: self.capture_done(result, back), back, cancellable=True)
 
-        self.edit("Admin password", "Authorize radio access for this capture.",
+        self.edit("Cardputer user password",
+                  "Enter your Cardputer login password to grant sudo radio access.",
                   re.compile(r"[ -~]{1,256}"), 256, authenticate, back, masked=True)
 
+    def report_capture(self, message):
+        self.capture_update = message
+
     def capture_done(self, result, back):
-        _, hashes, warning = result
+        pcap, hashes, kind = result
+        if pcap is None:
+            self.screen("Deauth stopped", "Returned the USB adapter to its original state.",
+                        back=back)
+            return
+        if hashes and wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")):
+            self.screen(f"{kind} captured", "PCAP and WPA hash saved. Upload to OnlineHashCrack?",
+                        (("Upload", lambda: self.terms(hashes, self.saved)),
+                         ("Keep local", self.saved)), self.saved)
+            return
         message = "PCAP and WPA hash file saved." if hashes else "PCAP saved. No usable WPA handshake or PMKID."
-        if warning:
-            message += " Deauth failed or was interrupted."
-        items = (("Submit WPA hashes", lambda: self.terms(hashes, self.saved)),) if hashes else ()
-        self.screen("Capture complete", message, items, back)
+        self.screen(f"{kind} captured" if kind else "Capture complete", message, back=back)
 
     def saved(self):
         captures = wifi.saved_captures()
         self.screen("Saved captures", "" if captures else "No captures saved.", tuple(
-            (path.parent.name, lambda path=path: self.details(path))
-            for path in captures
+            (f"{wifi.capture_name(path)}  •  {time.strftime('%b %d %H:%M', time.localtime(path.stat().st_mtime))}",
+             lambda path=path: self.details(path)) for path in captures
         ), self.attack)
 
     def details(self, path):
         hashes = path.with_suffix(".22000")
-        self.screen("Saved capture", path.parent.name + "\n" +
+        can_upload = hashes.exists() and wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key"))
+        self.screen("Saved capture", wifi.capture_name(path) + "\n" + path.parent.name + "\n" +
                     ("PCAP and WPA hash file" if hashes.exists() else "PCAP only"),
                     (("Submit WPA hashes", lambda: self.terms(hashes, self.saved)),)
-                    if hashes.exists() else (), self.saved)
+                    if can_upload else (), self.saved)
 
     def terms(self, path, back):
         self.screen("Submit to OnlineHashCrack",
@@ -289,10 +300,11 @@ class App:
 
     def work(self, title, prompt, operation, success, back, *, cancellable=False):
         self.cancel.clear()
+        self.capture_update = None
         self.future = self.executor.submit(operation)
         self.finished, self.failed = success, back
         self.cancellable = cancellable
-        self.screen(title, prompt, footer="Esc Stop and save" if cancellable else "Please wait")
+        self.screen(title, prompt, footer="Esc Stop" if cancellable else "Please wait")
 
     def key(self, code, state):
         if code in (42, 54):
@@ -327,6 +339,10 @@ class App:
                         self.screen("Zerogotchi", str(error), back=self.failed)
                     except OSError:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
+                if self.future and self.cancellable and not self.cancel.is_set():
+                    update = self.capture_update
+                    if update and update != self.message:
+                        self.message, self.dirty = update, True
                 now = time.monotonic()
                 if self.dirty:
                     footer = self.footer
