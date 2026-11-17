@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Zerogotchi
+Comment=Hello World for Cardputer Zero
+Exec=/usr/bin/zerogotchi
+Icon=share/images/zerogotchi.png
+Terminal=false
