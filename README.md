@@ -5,11 +5,17 @@ Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go ba
 
 ## Install on the Cardputer Zero
 
-From a checkout on the Cardputer, run:
+On the Cardputer, install the build tools and runtime dependencies, then build
+and install the Debian package:
 
 ```sh
+sudo apt update
+sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
+  network-manager sudo iw iproute2 tcpdump aircrack-ng hcxtools ca-certificates
+git clone https://github.com/unagisan69/Zerogotchi.git
+cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.0_all.deb
+sudo apt install ./build/zerogotchi_0.4.1_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -35,16 +41,20 @@ locally for review in **Saved captures**. It idles with the sweep totals until
 you press **Esc**. During a sweep, **Esc** stops after the current capture is
 closed and saved.
 
+The dashboard shows the current radio phase, successful deauth bursts on
+the current target, and a combined count of usable handshakes and PMKIDs.
+
 ## Attack mode
 
 Only test Wi-Fi networks and clients you own.
 
 1. Select **Attack**, accept the disclaimer, and scan for nearby networks.
-2. Connect a USB Wi-Fi adapter whose Linux driver supports monitor mode. For
-   deauthentication, the adapter must also support frame injection. Keep this
-   adapter disconnected from Wi-Fi and set its interface name in **Settings**.
-   Run `/usr/sbin/iw dev` over SSH to identify it. The onboard adapter on stock firmware
-   can scan but does not advertise monitor mode.
+2. In **Settings → WiFi Adapter**, select **Built-in (wlan0)** for scans,
+   **wlan1** for the usual USB capture adapter, or **Custom** for a different
+   interface. Run `/usr/sbin/iw dev` over SSH to identify your interface.
+   The stock onboard driver lacks monitor mode. Capture requires a
+   disconnected USB adapter with monitor mode, and deauth also requires
+   frame injection.
 3. Select the target BSSID and choose a mode:
 
    - **Passive Capture** listens for authentication exchanges.
@@ -58,8 +68,8 @@ Only test Wi-Fi networks and clients you own.
 
 4. **Saved captures** shows each network's SSID. Files are stored in
    `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/captures/`. Zerogotchi keeps the
-   PCAP and uses `hcxpcapngtool` to save target-filtered Hashcat mode 22000
-   records when a usable exchange is found.
+   PCAP and uses `hcxpcapngtool` to save target-filtered `.hc22000` files
+   when a usable exchange is found. Older `.22000` captures remain readable.
 
 Each radio session asks for your Cardputer user password with masked input. The app passes it
 to sudo through a pipe for that capture. The helper brings down idle managed
@@ -67,6 +77,41 @@ interfaces on the dedicated USB radio, opens a temporary monitor interface,
 and streams the capture to the app. It then removes the monitor interface and
 restores the original interface state. Keep the onboard radio connected for SSH
 and uploads.
+
+## Advanced methods with the wifit3 companion
+
+Zerogotchi's native modes cover passive WPA/WPA2 capture, directed deauth,
+and passive PMKID capture. The exact authentication variants that produce a
+usable hash depend on the captured exchange and `hcxpcapngtool`. The
+experimental WPA3 downgrade, active PMKID association, WPS recovery, and WEP
+methods use the separate [wifit3 terminal application](https://github.com/derv82/wifit3).
+Its upstream feature list covers CSA/BTM/deauth-based Evil Twin, WPS
+PixieDust/PBC/PIN recovery, and WEP ARP replay, ChopChop, fake authentication,
+and PTW. Availability varies by AP, client, and adapter.
+
+Install the pinned ARM64 release as your normal user on the Cardputer:
+
+```sh
+sudo apt install -y curl ca-certificates libusb-1.0-0
+install -d -m755 ~/.local/bin
+download=$(mktemp)
+curl -fL https://github.com/derv82/wifit3/releases/download/v0.7.1/wifit3-linux-arm64 -o "$download" &&
+  printf '%s  %s\n' 7cb0447c21dd7ad4d9c904d436da78cb1b1054f8ff8fb822aeb3793415df7fcd "$download" |
+  sha256sum -c - &&
+  install -m755 "$download" ~/.local/bin/wifit3
+rm -f "$download"
+~/.local/bin/wifit3
+```
+
+Launch it over SSH in a terminal. Its adapter picker runs without changing
+drivers. Starting its first USB session may ask for administrator access to
+configure udev permissions and module blocklists. Use a separate supported
+USB adapter if you want to keep your Zerogotchi capture adapter on its stock
+kernel driver, or follow wifit3's uninstall procedure before switching it
+back. Companion sessions keep their own captures and do not read the
+Zerogotchi blacklist or upload settings. Check the
+[upstream hardware matrix](https://github.com/derv82/wifit3/blob/master/docs/SUPPORTED-HARDWARE.md)
+for per-chipset support.
 
 ## OnlineHashCrack
 

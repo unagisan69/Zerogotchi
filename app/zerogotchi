@@ -97,16 +97,31 @@ class Display:
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
         resting = status.phase == "Idling"
-        face = "#96aeea" if resting else TEAL
-        draw.line((59, 44, 67, 33, 75, 33), fill=face, width=3)
-        draw.ellipse((73, 29, 81, 37), fill=face)
+        phase = status.phase
+        face, mood = {
+            "Idling": ("#96aeea", "sleep"),
+            "Deauthing": ("#ff9c73", "focus"),
+            "Checking": ("#d5a7ff", "squint"),
+            "Saving": ("#fff18e", "happy"),
+            "Uploading": ("#9cdcff", "focus"),
+        }.get(phase, (TEAL, "alert"))
+        tilt = -3 if blink and not resting else 0
+        draw.line((59, 44, 67, 33 + tilt, 75, 33 + tilt), fill=face, width=3)
+        draw.ellipse((73, 29 + tilt, 81, 37 + tilt), fill=face)
         draw.rounded_rectangle((25, 44, 94, 92), radius=9, outline=face, width=3)
         for x in (40, 72):
-            if resting or blink:
+            if mood in ("sleep", "squint") or blink:
                 draw.line((x, 64, x + 7, 64), fill=face, width=2)
+            elif mood == "focus":
+                draw.line((x, 59, x + 7, 64), fill=face, width=3)
+            elif mood == "happy":
+                draw.arc((x, 57, x + 8, 69), 190, 350, fill=face, width=2)
             else:
                 draw.rectangle((x, 60, x + 6, 68), fill=face)
-        draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
+        if mood in ("focus", "squint"):
+            draw.line((54, 77, 65, 77), fill=face, width=2)
+        else:
+            draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
         draw.text((59, 110), "Z z" if resting else "ON AIR", font=self.small,
                   anchor="mm", fill=face)
         draw.text((123, 9), status.phase, font=self.title, fill=TEAL)
@@ -122,13 +137,16 @@ class Display:
         progress = f"{status.attempted}/{status.total}"
         label = f"{progress} networks visited" if resting else f"Target {progress}"
         draw.text((124, 71), label, font=self.body, fill=WHITE)
-        draw.text((124, 91), f"{status.found} handshakes or PMKIDs", font=self.body, fill=WHITE)
-        if status.uploaded or status.queued or status.upload_failed:
+        draw.text((124, 91), f"{status.found} handshakes", font=self.body, fill=WHITE)
+        if status.network:
+            draw.text((124, 111), f"{status.deauths} deauth bursts sent",
+                      font=self.small, fill=MUTED)
+        elif status.uploaded or status.queued or status.upload_failed:
             draw.text((124, 111), f"{status.uploaded} sent  •  {status.queued} queued",
                       font=self.small, fill=MUTED)
         if status.skipped or status.failed or status.upload_failed:
             errors = status.failed + status.upload_failed
-            y = 126 if status.uploaded or status.queued or status.upload_failed else 111
+            y = 126 if status.network or status.uploaded or status.queued or status.upload_failed else 111
             draw.text((124, y), f"{status.skipped} skipped  •  {errors} failed",
                       font=self.small, fill=MUTED)
         draw.line((12, 142, 308, 142), fill=PANEL)
@@ -186,7 +204,11 @@ class App:
     def start_auto(self):
         adapter = wifi.read_setting("adapter")
         if not adapter:
-            self.screen("Capture adapter required", "Set your USB Wi-Fi adapter in Settings.", back=self.auto)
+            self.screen("WiFi adapter required", "Select a USB WiFi adapter in Settings.", back=self.auto)
+            return
+        if adapter == "wlan0":
+            self.screen("Built-in WiFi", "The stock driver supports scanning only. Select a USB adapter for Auto.",
+                        back=self.auto)
             return
         auto_upload = bool(wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")))
         if auto_upload:
@@ -267,7 +289,11 @@ class App:
     def start_capture(self, network, mode, back):
         adapter = wifi.read_setting("adapter")
         if not adapter:
-            self.screen("Capture adapter required", "Set your USB Wi-Fi adapter in Settings.", back=back)
+            self.screen("WiFi adapter required", "Select a USB WiFi adapter in Settings.", back=back)
+            return
+        if adapter == "wlan0":
+            self.screen("Built-in WiFi", "The stock driver supports scanning only. Select a USB adapter for capture.",
+                        back=back)
             return
 
         def authenticate(password):
@@ -305,7 +331,7 @@ class App:
         ), self.attack)
 
     def details(self, path):
-        hashes = path.with_suffix(".22000")
+        hashes = wifi.capture_hashfile(path)
         can_upload = hashes.exists() and wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key"))
         self.screen("Saved capture", wifi.capture_name(path) + "\n" + path.parent.name + "\n" +
                     ("PCAP and WPA hash file" if hashes.exists() else "PCAP only"),
@@ -334,7 +360,7 @@ class App:
         except wifi.WifiError:
             exclusions = "invalid"
         self.screen("Settings", items=(
-            (f"Capture adapter: {adapter or 'unset'}", self.adapter),
+            (f"WiFi Adapter: {'Built-in' if adapter == 'wlan0' else adapter or 'unset'}", self.adapter),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
             (f"SSID blacklist: {exclusions}", self.edit_blacklist),
         ), back=self.home)
@@ -357,11 +383,23 @@ class App:
         open_editor(wifi.read_setting("ssid-blacklist"))
 
     def adapter(self):
-        def save(value):
+        self.screen("WiFi Adapter", items=(
+            ("Built-in (wlan0) · scan only", lambda: self.save_adapter("wlan0")),
+            ("wlan1", lambda: self.save_adapter("wlan1")),
+            ("Custom…", self.custom_adapter),
+        ), back=self.settings)
+
+    def save_adapter(self, value):
+        try:
             wifi.save_setting("adapter", value)
-            self.settings()
-        self.edit("Capture adapter", "Enter the interface name of a dedicated USB Wi-Fi adapter.",
-                  USB_NAME, 15, save, self.settings, initial=wifi.read_setting("adapter"))
+        except OSError:
+            self.screen("Could not save adapter", back=self.adapter)
+            return
+        self.settings()
+
+    def custom_adapter(self):
+        self.edit("Custom WiFi adapter", "Enter the interface name of a dedicated USB WiFi adapter.",
+                  USB_NAME, 15, self.save_adapter, self.adapter, initial=wifi.read_setting("adapter"))
 
     def api_key(self):
         def save(value):

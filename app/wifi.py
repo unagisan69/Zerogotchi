@@ -56,6 +56,7 @@ class AutoStatus:
     uploaded: int = 0
     queued: int = 0
     upload_failed: int = 0
+    deauths: int = 0
 
 
 def split_nmcli(line):
@@ -75,10 +76,11 @@ def split_nmcli(line):
 
 
 def scan():
+    interface = ["ifname", "wlan0"] if read_setting("adapter") == "wlan0" else []
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-e", "yes", "-f", "BSSID,SSID,FREQ,SIGNAL,SECURITY",
-             "device", "wifi", "list", "--rescan", "yes"],
+             "device", "wifi", "list", *interface, "--rescan", "yes"],
             env={**os.environ, "LC_ALL": "C"}, capture_output=True, text=True,
             errors="replace", timeout=20, check=True,
         )
@@ -158,9 +160,16 @@ def hash_kind(hashes):
     return "WPA handshake" if any(line.startswith("WPA*02*") for line in hashes) else "PMKID"
 
 
-def capture(network, interface, mode, password, cancel, report, *, time_limit=None):
+def capture_hashfile(pcap):
+    modern = pcap.with_suffix(".hc22000")
+    return modern if modern.exists() else pcap.with_suffix(".22000")
+
+
+def capture(network, interface, mode, password, cancel, report, *, time_limit=None, radio_report=None):
     if not interface:
         raise WifiError("Set capture adapter in Settings")
+    if interface == "wlan0":
+        raise WifiError("Built-in WiFi can scan. Select a USB adapter for capture.")
     if is_ignored(network, blacklist()):
         raise WifiError("Network is excluded by the SSID blacklist")
     bssid = network.bssid.replace(":", "").lower()
@@ -193,6 +202,8 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                 next_probe = started + 2
                 scanned_size = 0
                 radio = "Preparing USB adapter…"
+                state, sent = "Tuning", 0
+                last_report = None
                 try:
                     while process.poll() is None and not cancel.wait(0.2):
                         if os.pread(errors.fileno(), 4096, 0).count(prompt) > 1:
@@ -201,22 +212,35 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                         if time_limit is not None and now - started >= time_limit:
                             break
                         end = os.fstat(errors.fileno()).st_size
-                        tail = os.pread(errors.fileno(), 4096, max(0, end - 4096))
-                        statuses = [line[10:] for line in tail.decode(errors="replace").splitlines()
+                        tail = os.pread(errors.fileno(), 4096, max(0, end - 4096)).decode(errors="replace")
+                        statuses = [line[10:] for line in tail.splitlines()
                                     if line.startswith("ZG STATUS ")]
                         if statuses:
                             radio = statuses[-1].replace(" | ", "\n")
+                        updates = re.findall(r"^ZG STATE (Listening|Deauthing) (\d+)$",
+                                             tail, re.MULTILINE)
+                        if updates:
+                            state, total = updates[-1]
+                            sent = int(total)
+                        if radio_report and (state, sent) != last_report:
+                            radio_report(state, sent)
+                            last_report = state, sent
                         size = os.fstat(output.fileno()).st_size if pcap else 0
-                        state = f"\nCaptured: {size // 1024} KiB\nWaiting for handshake or PMKID" if pcap else ""
-                        report(f"{int(now-started)}s elapsed\n{radio}{state}")
+                        capture_progress = f"\nCaptured: {size // 1024} KiB\nWaiting for handshake or PMKID" if pcap else ""
+                        report(f"{int(now-started)}s elapsed\n{radio}{capture_progress}")
                         if pcap and size > max(24, scanned_size) and now >= next_probe:
                             scanned_size, next_probe = size, now + 3
+                            if radio_report:
+                                radio_report("Checking", sent)
+                                last_report = None
                             try:
                                 hashes = extract_hashes(pcap, bssid, probe, timeout=5)
                             except (OSError, UnicodeError, subprocess.SubprocessError):
                                 # The capture can grow while the converter reads its final record.
                                 continue
                             if hashes:
+                                if radio_report:
+                                    radio_report("Saving", sent)
                                 report(hash_kind(hashes) + " captured. Saving files…")
                                 break
                 finally:
@@ -249,7 +273,7 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                     raise WifiError("Hash conversion failed. PCAP saved.") from error
         if not hashes:
             return pcap, None, ""
-        hashfile = pcap.with_suffix(".22000")
+        hashfile = pcap.with_suffix(".hc22000")
         hashfile.write_text("\n".join(hashes) + "\n", encoding="ascii")
         return pcap, hashfile, hash_kind(hashes)
     except (OSError, subprocess.SubprocessError) as error:
@@ -270,9 +294,9 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
     queue = []
     next_upload = 0
 
-    def status(phase, network=""):
+    def status(phase, network="", deauths=0):
         return AutoStatus(phase, network, attempted, len(targets), found, skipped,
-                          failed, uploaded, len(queue), upload_failed)
+                          failed, uploaded, len(queue), upload_failed, deauths)
 
     def send_pending(phase):
         nonlocal uploaded, upload_failed, next_upload
@@ -294,11 +318,12 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
         if cancel.is_set():
             break
         attempted += 1
-        report(status("Auditing", network.ssid))
+        report(status("Tuning", network.ssid))
         mode = "active" if network.frequency < 5925 else "passive"
         try:
             _, hashes, _ = capture(network, interface, mode, password, cancel,
-                                   lambda message: None, time_limit=target_seconds)
+                                   lambda message: None, time_limit=target_seconds,
+                                   radio_report=lambda phase, count: report(status(phase, network.ssid, count)))
         except AuthenticationError:
             raise
         except WifiError:

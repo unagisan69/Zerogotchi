@@ -99,9 +99,10 @@ def run_session(monitor, bssid, mode):
     capture = injection = stations_socket = None
     stations = {}
     last_attempt = {}
-    attempts = failures = 0
+    attempts = failures = sent = 0
     last_report = 0.0
     next_attempt = 0.0
+    last_state = None
     ap = bytes.fromhex(bssid.replace(":", ""))
     try:
         if mode != "deauth":
@@ -141,6 +142,8 @@ def run_session(monitor, bssid, mode):
                     status = 1
                 if status is not None:
                     failures += int(status != 0)
+                    if status == 0:
+                        sent += 2
                     injection = None
             if stations_socket is not None and injection is None and now >= next_attempt:
                 # A client must have been seen recently on the selected BSSID.
@@ -155,6 +158,10 @@ def run_session(monitor, bssid, mode):
                     injection_started = last_attempt[station] = now
                     next_attempt = now + 1
                     attempts += 1
+            state = ("Deauthing" if injection is not None else "Listening", sent)
+            if state != last_state:
+                print(f"ZG STATE {state[0]} {state[1]}", file=sys.stderr, flush=True)
+                last_state = state
             if stations_socket is not None and now - last_report >= 2:
                 for mac in tuple(stations):
                     if now - stations[mac] > 60:
