@@ -18,7 +18,9 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 import gnss
+import survey_privacy
 import updater
+import wdgwars
 import wifi
 import wigle
 
@@ -233,6 +235,9 @@ class Display:
         draw.text((124, 49), f"{status.networks} networks  •  {status.scans} scans",
                   font=self.body, fill=WHITE)
         draw.text((124, 66), f"{status.observations} GPS observations", font=self.body, fill=WHITE)
+        if status.phase == "Private":
+            draw.text((124, 99), "Private zone: scan paused", font=self.body, fill=TEAL)
+            return
         if location:
             latitude, longitude, accuracy, current = location
             draw.text((124, 87), "GPS fix" if current else "Last GPS fix", font=self.small, fill=TEAL)
@@ -331,7 +336,7 @@ class App:
 
     def wardriving(self):
         self.screen("Wardriving", "Scan for nearby networks and save GPS-tagged observations locally.",
-                    (("Start", self.start_wardriving), ("Saved surveys", self.wigle_surveys)),
+                    (("Start", self.start_wardriving), ("Saved surveys", lambda: self.wigle_surveys(self.wardriving))),
                     back=self.home)
 
     def start_wardriving(self):
@@ -354,10 +359,8 @@ class App:
         summary = (f"{status.networks} networks in {status.scans} scans. "
                    f"{status.observations} GPS observations saved.")
         options = (("Exit to main menu", self.home),)
-        if status.survey and wigle.credentials():
-            summary += "\nUpload this GPS-tagged survey to WiGLE?"
-            options += (("Upload to WiGLE", lambda: self.wigle_request(
-                lambda: wigle.upload(status.survey), self.home)),)
+        if status.survey:
+            options += self.survey_options(status.survey, lambda: self.wardrive_done(status), self.home)
         self.screen("Wardriving stopped", summary, options, back=self.home)
 
     def auto_log(self):
@@ -414,7 +417,7 @@ class App:
     def about(self):
         self.screen("About", "Zerogotchi by unagisan69\n\n"
                     "A Wi-Fi lab auditor for Cardputer Zero. Auto and Attack capture WPA handshakes. "
-                    "Wardriving logs GPS observations. Supports WiGLE, OnlineHashCrack, and face themes.",
+                    "Wardriving logs GPS observations. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
                     back=self.home)
 
     def update(self):
@@ -576,13 +579,19 @@ class App:
             exclusions = len(wifi.blacklist())
         except wifi.WifiError:
             exclusions = "invalid"
+        try:
+            zones = len(survey_privacy.zones())
+        except wifi.WifiError:
+            zones = "invalid"
         self.screen("Settings", items=(
             (f"Theme: {THEMES[self.theme]}", self.select_theme),
             (f"Wardriving Adapter: {wifi.read_setting('wardriving-adapter') or 'Built-in'}", self.wardrive_adapter),
             (f"WiFi Adapter: {'Built-in' if adapter == 'wlan0' else adapter or 'unset'}", self.adapter),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
             (f"SSID blacklist: {exclusions}", self.edit_blacklist),
+            (f"Private Zones: {zones}", self.private_zones),
             (f"WiGLE: {'credentials saved' if wigle.credentials() else 'not configured'}", self.wigle_settings),
+            (f"WDG Wars: {'key saved' if wdgwars.credentials() else 'not configured'}", self.wdgwars_settings),
         ), back=self.home)
 
     def select_theme(self):
@@ -618,23 +627,106 @@ class App:
         self.edit("WiGLE API name", "Enter your API name.",
                   wigle.CREDENTIAL, 128, token, self.wigle_settings, masked=True)
 
-    def wigle_surveys(self):
+    def wigle_surveys(self, back=None):
         paths = wigle.surveys()
-        self.screen("WiGLE surveys", "" if paths else "Auto records a survey after a GPS fix.",
-                    tuple((path.name[7:-4], lambda path=path: self.wigle_confirm(path))
-                          for path in paths), self.wigle_settings)
+        saved = lambda: self.wigle_surveys(back)
+        self.screen("Saved surveys", "" if paths else "Wardriving records surveys after a GPS fix.",
+                    tuple((path.name[7:-4], lambda path=path: self.survey_destinations(path, saved))
+                          for path in paths), back or self.wigle_settings)
 
-    def wigle_confirm(self, path):
-        self.screen("Upload WiGLE survey?",
-                    "Send observed network names, BSSIDs, signal levels, and GPS locations to WiGLE?",
-                    (("Cancel", self.wigle_surveys),
-                     ("Upload", lambda: self.wigle_request(lambda: wigle.upload(path), self.wigle_surveys))),
-                    self.wigle_surveys)
+    def survey_destinations(self, path, back):
+        options = self.survey_options(path, lambda: self.survey_destinations(path, back), back)
+        self.screen("Upload survey", "Choose a destination." if options else "Configure an upload key in Settings.",
+                    options, back=back)
+
+    def survey_options(self, path, back, done):
+        providers = (("WiGLE", wigle), ("WDG Wars", wdgwars))
+        return tuple((f"Upload to {name}", lambda name=name, provider=provider:
+                      self.confirm_survey(name, provider, path, back, done))
+                     for name, provider in providers if provider.credentials())
+
+    def confirm_survey(self, name, provider, path, back, done):
+        self.screen(f"Upload to {name}?",
+                    "Send filtered network names, BSSIDs, signal levels, and GPS locations?",
+                    (("Cancel", back),
+                     ("Upload", lambda: self.provider_request(name, lambda: provider.upload(path), done))),
+                    back)
 
     def wigle_request(self, action, back=None):
-        back = back or self.wigle_settings
-        self.work("WiGLE", "Contacting WiGLE…", action,
-                  lambda message: self.screen("WiGLE", message, back=back), back)
+        self.provider_request("WiGLE", action, back or self.wigle_settings)
+
+    def provider_request(self, name, action, back):
+        self.work(name, f"Contacting {name}…", action,
+                  lambda message: self.screen(name, message, back=back), back)
+
+    def wdgwars_settings(self):
+        self.screen("WDG Wars", items=(
+            ("Set API key", self.wdgwars_key),
+            ("Test API key", lambda: self.provider_request("WDG Wars", wdgwars.test_profile, self.wdgwars_settings)),
+            ("Saved surveys", lambda: self.wigle_surveys(self.wdgwars_settings)),
+        ), back=self.settings)
+
+    def wdgwars_key(self):
+        def save(key):
+            wifi.save_setting("wdgwars-key", key)
+            self.wdgwars_settings()
+        self.edit("WDG Wars API key", "Enter or replace your 64-character API key.",
+                  wdgwars.KEY, 64, save, self.wdgwars_settings, masked=True)
+
+    def private_zones(self):
+        try:
+            zones = survey_privacy.zones()
+        except wifi.WifiError:
+            self.screen("Private Zones", "The zone file is invalid.",
+                        (("Replace zone file", lambda: self.zone_editor([], None)),), back=self.settings)
+            return
+        options = (("Add zone", lambda: self.zone_editor(zones, None)),)
+        options += tuple((f"{z.latitude:.5f}, {z.longitude:.5f}  •  {z.radius:g} m",
+                          lambda index=index: self.zone_details(zones, index))
+                         for index, z in enumerate(zones))
+        self.screen("Private Zones", "" if zones else "Pause survey recording inside a GPS circle.",
+                    options, back=self.settings)
+
+    def zone_details(self, zones, index):
+        zone = zones[index]
+        def remove():
+            self.screen("Remove private zone?", "Future surveys can record in this area.",
+                        (("Cancel", self.private_zones),
+                         ("Remove", lambda: self.update_zones(zones[:index] + zones[index + 1:]))),
+                        back=self.private_zones)
+        self.screen("Private zone", f"{zone.latitude:g}, {zone.longitude:g}\nRadius: {zone.radius:g} m",
+                    (("Edit", lambda: self.zone_editor(zones, index)), ("Remove", remove)),
+                    back=self.private_zones)
+
+    def update_zones(self, zones):
+        try:
+            survey_privacy.save_zones(zones)
+        except OSError:
+            self.screen("Could not save zones", back=self.private_zones)
+            return
+        self.private_zones()
+
+    def zone_editor(self, zones, index):
+        def open_editor(value):
+            self.edit("Private zone", "Latitude, longitude, radius in meters.\nExample: 40.0,-74.0,150",
+                      re.compile(r"[0-9eE.,+ -]{1,64}"), 64, save, self.private_zones, initial=value, tail=True)
+
+        def save(value):
+            try:
+                zone = survey_privacy.parse_zone(value)
+            except wifi.WifiError as error:
+                open_editor(value)
+                self.update_editor(str(error))
+                return
+            updated = list(zones)
+            if index is None:
+                updated.append(zone)
+            else:
+                updated[index] = zone
+            self.update_zones(updated)
+
+        current = zones[index] if index is not None else None
+        open_editor(f"{current.latitude},{current.longitude},{current.radius}" if current else "")
 
     def edit_blacklist(self):
         def open_editor(value):

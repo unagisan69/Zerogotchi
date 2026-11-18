@@ -1,8 +1,10 @@
 """Local WiGLE surveys and account API, independent of WPA captures."""
 
 import csv
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -12,6 +14,8 @@ from dataclasses import dataclass
 import uuid
 
 import wifi
+import gnss
+import survey_privacy
 
 
 BASE_URL = "https://api.wigle.net/api/v2"
@@ -75,11 +79,50 @@ def surveys():
     return sorted(SURVEYS.glob("survey-*.csv"), reverse=True)
 
 
-def upload(path):
+@contextmanager
+def export_survey(path):
     if (path.parent != SURVEYS or not re.fullmatch(r"survey-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.csv", path.name)
             or path.is_symlink() or not path.is_file()):
         raise wifi.WifiError("Invalid survey file")
-    request("/file/upload", path)
+    configured = survey_privacy.zones()
+    ignored = wifi.blacklist()
+    with tempfile.TemporaryDirectory(prefix="zg-survey-") as temp:
+        export = Path(temp) / path.name
+        count = 0
+        try:
+            with (path.open(encoding="utf-8", newline="") as source,
+                  export.open("w", encoding="utf-8", newline="") as output):
+                reader = csv.reader(source, strict=True)
+                metadata, columns = next(reader), next(reader)
+                if not metadata or metadata[0] != "WigleWifi-1.6" or columns != list(HEADER):
+                    raise wifi.WifiError("Unrecognized survey format")
+                writer = csv.writer(output)
+                writer.writerows((metadata, columns))
+                for row in reader:
+                    if len(row) != len(HEADER) or row[1] in ignored or (ignored and not row[1]):
+                        continue
+                    try:
+                        latitude, longitude, accuracy = map(float, (row[7], row[8], row[10]))
+                    except ValueError:
+                        continue
+                    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180
+                            and math.isfinite(accuracy) and accuracy >= 0):
+                        continue
+                    point = gnss.Fix(latitude, longitude, 0, accuracy, 0)
+                    if survey_privacy.private(point, configured):
+                        continue
+                    writer.writerow(row)
+                    count += 1
+        except (StopIteration, UnicodeError, csv.Error) as error:
+            raise wifi.WifiError("Unrecognized survey format") from error
+        if not count:
+            raise wifi.WifiError("No observations remain after privacy filtering")
+        yield export
+
+
+def upload(path):
+    with export_survey(path) as export:
+        request("/file/upload", export)
     return "WiGLE accepted the survey for processing."
 
 
@@ -159,12 +202,14 @@ def append_survey(path, rows, now):
 
 
 def record_survey(position, cancel):
-    if cancel.is_set() or position() is None:
+    configured = survey_privacy.zones()
+    fix = position()
+    if cancel.is_set() or fix is None or survey_privacy.private(fix, configured):
         return None
     networks = wifi.scan(interface="wlan0")
     signals = rssi_by_bssid()
     fix = position()
-    if fix is None or cancel.is_set():
+    if fix is None or cancel.is_set() or survey_privacy.private(fix, configured):
         return None
     now = datetime.now(timezone.utc)
     rows = survey_rows(networks, signals, fix, now)
@@ -191,17 +236,29 @@ def wardrive(interface, position, cancel, report, *, interval=12):
     seen = set()
     scans = observations = 0
     survey = None
+    configured = survey_privacy.zones()
     while not cancel.is_set():
+        first_fix = position()
+        if configured and (first_fix is None or survey_privacy.private(first_fix, configured)):
+            phase = "Locating" if first_fix is None else "Private"
+            report(WardriveStatus(phase, scans, len(seen), observations))
+            cancel.wait(min(2, interval))
+            continue
         report(WardriveStatus("Scanning", scans, len(seen), observations))
         error = ""
         try:
             networks = wifi.scan(interface=interface)
+            scan_fix = position()
+            if cancel.is_set():
+                break
+            if configured and (scan_fix is None or survey_privacy.private(scan_fix, configured)):
+                continue
             scans += 1
             seen.update(network.bssid for network in networks)
-            if position() is not None and not cancel.is_set():
+            if scan_fix is not None and not cancel.is_set():
                 signals = rssi_by_bssid(interface)
                 fix = position()
-                if fix is not None and not cancel.is_set():
+                if fix is not None and not cancel.is_set() and not survey_privacy.private(fix, configured):
                     now = datetime.now(timezone.utc)
                     rows = survey_rows(networks, signals, fix, now)
                     if rows:

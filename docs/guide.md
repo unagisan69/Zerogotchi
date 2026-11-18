@@ -4,7 +4,7 @@
 
 [Auto](#auto) · [Attack](#attack) · [Saved captures](#saved-captures) ·
 [Wardriving](#wardriving) · [Settings](#settings-and-dashboard) ·
-[OnlineHashCrack](#onlinehashcrack) · [WiGLE](#wigle)
+[OnlineHashCrack](#onlinehashcrack) · [Private Zones](#private-zones) · [Survey uploads](#survey-uploads)
 
 Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go
 back or stop. Use Auto and Attack only on networks and clients you own or are
@@ -70,9 +70,9 @@ OnlineHashCrack tasks stay available.
    power GPS.
 2. Watch completed scans, unique networks, logged GPS observations, and your
    latest latitude and longitude. A stale position is labeled **Last GPS fix**.
-3. Press **Esc** to stop. With WiGLE credentials and a saved survey, you can
-   upload the session from the summary or exit to the main menu. Find local
-   reports later under **Wardriving → Saved surveys**.
+3. Press **Esc** to stop. With a saved survey, the summary offers each upload
+   service that has credentials configured, along with **Exit to main menu**.
+   Find local reports later under **Wardriving → Saved surveys**.
 
 Wardriving repeatedly scans with NetworkManager and respects the SSID
 blacklist. With a fresh fix, it adds observations with measured signal levels
@@ -87,8 +87,10 @@ adapter setting and defaults to the onboard `wlan0`.
 | **WiFi Adapter** | Set the radio for Auto and Attack. |
 | **Wardriving Adapter** | Choose the Wardriving interface independently. |
 | **SSID blacklist** | Enter case-sensitive, comma-separated SSIDs. Quote a name that contains commas. With a blacklist enabled, hidden SSIDs are excluded when their names cannot be checked. |
+| **Private Zones** | Add GPS circles where survey recording pauses. |
 | **OnlineHashCrack API key** | Save a masked key for WPA hash submissions. |
 | **WiGLE** | Save and test the WiGLE API name and token, and manage survey uploads. |
+| **WDG Wars** | Save and test the WDG Wars API key, and manage survey uploads. |
 
 The satellite indicator lights after valid GNSS data arrives, the globe reflects
 NetworkManager's internet check, and the battery fill uses the stock gauge.
@@ -107,17 +109,39 @@ and retries temporary connection failures while idling.
 The app sends mode 22000 hashes in batches of up to 50 and shows accepted,
 skipped, and rejected totals. PCAPs stay on the Cardputer.
 
-## WiGLE
+## Private Zones
+
+1. Open **Settings → Private Zones → Add zone**.
+2. Enter the circle center as latitude and longitude in decimal degrees,
+   followed by the radius in meters. For example, `40.0,-74.0,150` creates a
+   150-meter circle. Use negative values for south and west.
+3. Press **Enter** to save. Select a saved circle to edit or remove it.
+
+With a zone configured, Wardriving waits for a fresh GPS fix before scanning.
+It displays **Private** and pauses scans when a circle overlaps the estimated
+GPS accuracy area. It resumes after a fresh fix places you outside the zones.
+Auto applies the circles to its location-tagged survey snapshots.
+
+Both upload services recheck the current zones and the existing SSID blacklist
+before sending a saved survey. This filters matching rows out of the upload
+copy while keeping the original local CSV. GPS and radio measurements are
+estimates. Allow extra radius at the edge of an area you want to protect.
+
+## Survey uploads
 
 In **Settings → WiGLE**, save the API name and token and select **Test
 credentials** to verify account access. With credentials configured, Auto can
 save one local survey after a fresh GPS fix. Wardriving saves local observations
 regardless of whether credentials are configured.
 
-Select a file under **Saved surveys** and confirm to upload its BSSIDs, SSIDs,
-signal levels, and observation coordinates to WiGLE for processing. Survey
-accuracy is estimated from the receiver's HDOP. WiGLE surveys contain network
-observations. WPA hash submissions use the separate OnlineHashCrack flow.
+In **Settings → WDG Wars**, choose **Set API key** and enter the 64-character key
+from your WDG Wars account. **Test API key** verifies access through the profile
+endpoint. The app stores the key in an owner-only settings file.
+
+Choose a destination when Wardriving ends or select a file under **Saved surveys**.
+Confirm to send the filtered BSSIDs, SSIDs, signal levels, and GPS coordinates.
+WDG Wars uses its CSV upload endpoint. Survey accuracy is estimated from the
+receiver’s HDOP. WPA hash submissions use the separate OnlineHashCrack flow.
 
 ## Local files
 

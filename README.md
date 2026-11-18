@@ -48,7 +48,8 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | **[Saved captures](docs/guide.md#saved-captures)** | Review captures by network name. Keeps PCAPs and target-filtered Hashcat mode 22000 files. Includes a confirmed **Clear all handshakes** action. |
 | **[Wardriving](docs/guide.md#wardriving)** | Scans with a separately configurable adapter and shows unique networks, scan counts, GPS observation counts, and the latest fix. Saves a local WiGLE CSV when GPS has a fix. |
 | **[OnlineHashCrack](docs/guide.md#onlinehashcrack)** | Submit WPA hashes from Saved captures, or let Auto send new results after upfront consent. Auto retries temporary connection failures. |
-| **[WiGLE](docs/guide.md#wigle)** | Test your credentials, upload a saved GPS-tagged survey after Wardriving, or select a local survey later. |
+| **[Survey uploads](docs/guide.md#survey-uploads)** | Send GPS-tagged surveys to WiGLE or WDG Wars after Wardriving, or pick a saved survey later. |
+| **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving in GPS circles and filter observations against those zones and the SSID blacklist before sending. |
 | **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto, Wardriving, and Attack. Dashboard indicators use the Cardputer’s live status. |
 | **[In-app updates](docs/installation.md#install-or-upgrade)** | Check GitHub for a newer release and install its verified Debian package from the main menu. |
 
