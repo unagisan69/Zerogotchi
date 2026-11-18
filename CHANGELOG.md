@@ -1,0 +1,45 @@
+# Changelog
+
+This file tracks user-visible changes to Zerogotchi's GitHub releases.
+For setup and controls, see the [user guide](docs/guide.md) and
+[installation instructions](docs/installation.md).
+
+When adding a user-facing feature, update the README and the relevant guide,
+then record the change under **Unreleased**. Move those entries under the
+version heading when publishing a release.
+
+## Unreleased
+
+## [0.4.13](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.13)
+
+- Renamed the two attack modes to **Auto WiFi Attack** and **Manual WiFi Attack**.
+- Renamed the setting to **SSID block list**. Existing entries carry over.
+
+## [0.4.12](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.12)
+
+- Added **P** to pause or resume Auto and Wardriving. **Esc** ends either session.
+- Auto saves the current packets when paused and returns to the same access point if it still needs a usable result. Wardriving starts a fresh scan on resume.
+
+## [0.4.11](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.11)
+
+- Added WDG Wars API key setup and a read-only account check. Wardriving offers configured destinations for WiGLE and WDG Wars uploads.
+- Added **Private Zones** to pause Wardriving scans inside configured GPS circles or while waiting for a fresh fix. Both upload services apply the current zones and SSID block list to saved surveys before sending.
+
+## [0.4.10](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.10)
+
+- Added MIT licensing for the app and artwork, Cardputer Zero AppStore listing metadata, and a real-device review demo.
+
+## [0.4.9](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.9)
+
+- Added CardputerZero AppBuilder packaging for the Python framebuffer app. The AppBuilder and local builds share package metadata, assets, and the stock launcher entry.
+
+## [0.4.8](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.8)
+
+- Added a WiGLE upload prompt at the end of Wardriving when a survey and credentials are available.
+- Put Active Capture first and added a themed dashboard showing live attack and capture activity.
+- Added an in-app GitHub release updater. Updated About with current features and author credit.
+
+## [0.4.7](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.7)
+
+- First packaged GitHub release. Includes Auto and targeted attack modes, GPS-tagged Wardriving with WiGLE CSV export, and the Acidburn, Computer, and Zero Cool themes.
+- Wardriving uses a separate adapter setting that defaults to the onboard Wi-Fi radio. Dashboard GPS, internet, and battery icons share a common height.
