@@ -13,6 +13,7 @@ import time
 
 from PIL import Image, ImageDraw, ImageFont
 
+import gnss
 import wifi
 
 
@@ -92,7 +93,7 @@ class Display:
         draw.text((12, 151), footer, font=self.small, fill=MUTED)
         self.paint(image)
 
-    def draw_auto(self, status, blink):
+    def draw_auto(self, status, blink, gps_on):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
@@ -149,6 +150,8 @@ class Display:
                       font=self.small, fill=MUTED)
         draw.line((12, 142, 308, 142), fill=PANEL)
         draw.text((12, 150), "Esc Back" if resting else "Esc Stop sweep", font=self.small, fill=MUTED)
+        draw.text((308, 150), "GPS: on" if gps_on else "GPS: off", anchor="rt",
+                  font=self.small, fill=TEAL if gps_on else MUTED)
         self.paint(image)
 
     def paint(self, image):
@@ -178,6 +181,8 @@ class App:
         self.cancel = threading.Event()
         self.future = None
         self.editor = None
+        self.gnss = None
+        self.gps_on = False
         self.running = True
         self.shift = set()
         self.home()
@@ -220,6 +225,7 @@ class App:
 
     def auto_password(self, adapter, auto_upload, back):
         def authenticate(password):
+            self.gnss = gnss.GnssMonitor(wifi.HELPER, password)
             self.work("Auto", "",
                       lambda: wifi.auto_capture(adapter, password, self.cancel, self.report_capture,
                                                 auto_upload=auto_upload),
@@ -323,10 +329,28 @@ class App:
 
     def saved(self):
         captures = wifi.saved_captures()
-        self.screen("Saved captures", "" if captures else "No captures saved.", tuple(
+        handshakes = [path for path, _ in wifi.saved_handshakes()]
+        clear = (("Clear all handshakes…", lambda: self.confirm_clear_handshakes(handshakes)),) if handshakes else ()
+        self.screen("Saved captures", "" if captures else "No captures saved.", clear + tuple(
             (f"{wifi.capture_name(path)}  •  {time.strftime('%b %d %H:%M', time.localtime(path.stat().st_mtime))}",
              lambda path=path: self.details(path)) for path in captures
         ), self.attack)
+        if clear:
+            self.index = 1
+
+    def confirm_clear_handshakes(self, captures):
+        def clear():
+            try:
+                wifi.clear_handshakes(captures)
+            except OSError:
+                self.screen("Clear incomplete", "Some captures could not be removed.", back=self.saved)
+                return
+            self.saved()
+
+        self.screen("Clear all handshakes?",
+                    f"Delete {len(captures)} local capture entries with usable hashes, including their PCAPs? "
+                    "PCAP-only entries will stay.",
+                    (("Cancel", self.saved), ("Clear all", clear)), self.saved)
 
     def details(self, path):
         hashes = wifi.capture_hashfile(path)
@@ -497,9 +521,16 @@ class App:
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
                 now = time.monotonic()
+                if self.gnss:
+                    if not self.auto_status:
+                        self.gnss.close()
+                        self.gnss = None
+                    gps_on = bool(self.gnss and self.gnss.poll(now))
+                    if gps_on != self.gps_on:
+                        self.gps_on, self.dirty = gps_on, True
                 blink = int(now * 5) % 18 == 0
                 if self.auto_status and (self.dirty or blink != last_blink):
-                    self.display.draw_auto(self.auto_status, blink)
+                    self.display.draw_auto(self.auto_status, blink, self.gps_on)
                     self.dirty, last_paint, last_blink = False, now, blink
                 elif self.dirty:
                     footer = self.footer
@@ -520,6 +551,8 @@ class App:
                         self.key(code, state)
         finally:
             self.cancel.set()
+            if self.gnss:
+                self.gnss.close()
 
 
 if __name__ == "__main__":

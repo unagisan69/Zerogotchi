@@ -1,8 +1,8 @@
-VERSION = 0.4.2
+VERSION = 0.4.3
 ARCH = all
 PACKAGE = build/zerogotchi_$(VERSION)_$(ARCH).deb
 STAGE = build/package
-SOURCES = app/zerogotchi app/wifi.py app/radio
+SOURCES = app/zerogotchi app/wifi.py app/gnss.py app/radio
 ASSETS = packaging/zerogotchi.desktop packaging/zerogotchi.png
 
 .PHONY: all package clean
@@ -14,6 +14,7 @@ $(PACKAGE): $(SOURCES) $(ASSETS) Makefile
 	install -Dm755 app/zerogotchi $(STAGE)/usr/lib/zerogotchi/zerogotchi
 	install -Dm755 app/radio $(STAGE)/usr/lib/zerogotchi/radio
 	install -Dm644 app/wifi.py $(STAGE)/usr/lib/zerogotchi/wifi.py
+	install -Dm644 app/gnss.py $(STAGE)/usr/lib/zerogotchi/gnss.py
 	install -d -m755 $(STAGE)/usr/bin
 	ln -s ../lib/zerogotchi/zerogotchi $(STAGE)/usr/bin/zerogotchi
 	install -Dm644 packaging/zerogotchi.png $(STAGE)/usr/share/APPLaunch/share/images/zerogotchi.png

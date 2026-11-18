@@ -347,9 +347,11 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
 def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25):
     nearby = scan()
     channels = supported_channels(interface)
+    captured = {bssid for _, bssids in saved_handshakes() for bssid in bssids}
     targets = [network for network in nearby if network.ssid
                and {"WPA", "WPA1", "WPA2"}.intersection(network.security.split())
-               and "802.1X" not in network.security and network.frequency in channels]
+               and "802.1X" not in network.security and network.frequency in channels
+               and network.bssid.replace(":", "").lower() not in captured]
     skipped = len(nearby) - len(targets)
     attempted = found = failed = 0
     uploaded = upload_failed = 0
@@ -443,7 +445,35 @@ def capture_name(path):
 
 
 def saved_captures():
-    return sorted(CAPTURES.glob("*/capture.pcap"), key=lambda path: path.stat().st_mtime, reverse=True)
+    paths = (path for path in CAPTURES.glob("*/capture.pcap")
+             if not path.parent.is_symlink() and not path.is_symlink() and path.is_file())
+    return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def saved_handshakes():
+    records = []
+    pattern = re.compile(r"^WPA\*0[12]\*[0-9a-f]{32}\*([0-9a-f]{12})\*[0-9a-f]{12}\*",
+                         re.IGNORECASE | re.MULTILINE)
+    for pcap in saved_captures():
+        bssids = set()
+        for suffix in (".hc22000", ".22000"):
+            hashes = pcap.with_suffix(suffix)
+            if hashes.is_file() and not hashes.is_symlink():
+                bssids.update(bssid.lower() for bssid in
+                              pattern.findall(hashes.read_text(encoding="ascii", errors="ignore")))
+        if bssids:
+            records.append((pcap, bssids))
+    return records
+
+
+def clear_handshakes(captures):
+    for pcap in captures:
+        pcap.unlink(missing_ok=True)
+        pcap.with_suffix(".hc22000").unlink(missing_ok=True)
+        pcap.with_suffix(".22000").unlink(missing_ok=True)
+        (pcap.parent / "network.json").unlink(missing_ok=True)
+        if not any(pcap.parent.iterdir()):
+            pcap.parent.rmdir()
 
 
 def upload(path):

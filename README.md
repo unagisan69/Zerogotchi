@@ -15,7 +15,7 @@ sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
 git clone https://github.com/unagisan69/Zerogotchi.git
 cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.2_all.deb
+sudo apt install ./build/zerogotchi_0.4.3_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -33,7 +33,8 @@ Use **Auto** only where you own all the networks it can target. It scans once
 and visits each eligible BSSID in signal order, using Active Capture for up
 to 25 seconds per target or until it finds a usable handshake or PMKID.
 Auto skips hidden, open, enterprise, WPA3-only, and unsupported-channel
-networks. It leaves the USB adapter in monitor mode for the sweep and uses
+networks, and APs with a saved usable handshake or PMKID for the same BSSID.
+It leaves the USB adapter in monitor mode for the sweep and uses
 passive capture on supported channels marked DFS or no-IR, or on 6 GHz.
 If an access point yields no packets, Auto gives it one short passive retry.
 If monitor startup fails on the Realtek RTL8821CU USB device `0bda:c811`,
@@ -49,6 +50,9 @@ closed and saved.
 
 The dashboard shows the current radio phase, successful deauth bursts on
 the current target, and a combined count of usable handshakes and PMKIDs.
+It shows **GPS: on** after receiving valid NMEA from the GNSS HAT at 115200
+baud, even before the receiver has a position fix. Auto uses the stock external
+5 V rail and restores it when you leave if it powered the rail on.
 
 ## Attack mode
 
@@ -76,6 +80,9 @@ Only test Wi-Fi networks and clients you own.
    `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/captures/`. Zerogotchi keeps the
    PCAP and uses `hcxpcapngtool` to save target-filtered `.hc22000` files
    when a usable exchange is found. Older `.22000` captures remain readable.
+   **Clear all handshakes** deletes local entries containing usable hashes,
+   including the corresponding PCAPs. PCAP-only entries and OnlineHashCrack
+   tasks stay available.
 
 Each radio session asks for your Cardputer user password with masked input. The app passes it
 to sudo through a pipe for that capture. The helper brings down idle managed
