@@ -1,9 +1,10 @@
-VERSION = 0.4.4
+VERSION = 0.4.5
 ARCH = all
 PACKAGE = build/zerogotchi_$(VERSION)_$(ARCH).deb
 STAGE = build/package
 SOURCES = app/zerogotchi app/wifi.py app/gnss.py app/wigle.py app/radio
-ASSETS = packaging/zerogotchi.desktop packaging/zerogotchi.png
+THEME_ASSETS = $(wildcard app/themes/acidburn/*.png)
+ASSETS = packaging/zerogotchi.desktop packaging/zerogotchi.png $(THEME_ASSETS)
 
 .PHONY: all package clean
 all: package
@@ -16,6 +17,8 @@ $(PACKAGE): $(SOURCES) $(ASSETS) Makefile
 	install -Dm644 app/wifi.py $(STAGE)/usr/lib/zerogotchi/wifi.py
 	install -Dm644 app/gnss.py $(STAGE)/usr/lib/zerogotchi/gnss.py
 	install -Dm644 app/wigle.py $(STAGE)/usr/lib/zerogotchi/wigle.py
+	install -d -m755 $(STAGE)/usr/lib/zerogotchi/themes/acidburn
+	install -m644 $(THEME_ASSETS) $(STAGE)/usr/lib/zerogotchi/themes/acidburn/
 	install -d -m755 $(STAGE)/usr/bin
 	ln -s ../lib/zerogotchi/zerogotchi $(STAGE)/usr/bin/zerogotchi
 	install -Dm644 packaging/zerogotchi.png $(STAGE)/usr/share/APPLaunch/share/images/zerogotchi.png

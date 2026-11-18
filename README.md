@@ -15,7 +15,7 @@ sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
 git clone https://github.com/unagisan69/Zerogotchi.git
 cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.4_all.deb
+sudo apt install ./build/zerogotchi_0.4.5_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -54,6 +54,9 @@ icon lights when the HAT sends valid NMEA at 115200 baud. The globe indicates
 whether NetworkManager's internet check passes, and the battery icon shows the
 stock gauge's charge percentage. Auto restores the external 5 V rail when you
 leave if it powered the rail on.
+
+**Settings → Theme** switches the Auto dashboard face between **Acidburn**
+(the default illustrated theme) and **Computer** (the original animated face).
 
 **Auto → Session log** shows the latest sweep's decisions and results. The file
 at `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/auto-session.log` is replaced
