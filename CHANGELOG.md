@@ -10,6 +10,12 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.14](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.14)
+
+- Added an SSID allow list for Auto WiFi Attack and Wardriving.
+- Added lifetime results and a counter reset for Auto, Manual, and Wardriving.
+- Wardriving shows satellites in view, logs Bluetooth LE observations, and skips previously logged Wi-Fi and BLE addresses across sessions.
+
 ## [0.4.13](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.13)
 
 - Renamed the two attack modes to **Auto WiFi Attack** and **Manual WiFi Attack**.

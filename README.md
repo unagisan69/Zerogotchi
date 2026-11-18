@@ -47,8 +47,10 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | **[Auto WiFi Attack](docs/guide.md#auto-wifi-attack)** | Visits eligible access points once, runs capture and directed deauth where the radio and channel allow it, then idles. Skips blocked SSIDs and BSSIDs with saved results. Shows a session-wide deauth count and logs skip reasons. Press **P** to pause or resume. |
 | **[Manual WiFi Attack](docs/guide.md#manual-wifi-attack)** | Select an access point for Active Capture, Passive Capture, or Deauth Attack. Follow target and radio activity on the themed dashboard. Capture stops on a usable handshake or PMKID. |
 | **[Saved captures](docs/guide.md#saved-captures)** | Review captures by network name. Keeps PCAPs and target-filtered Hashcat mode 22000 files. Includes a confirmed **Clear all handshakes** action. |
-| **[Wardriving](docs/guide.md#wardriving)** | Scans with a separately configurable adapter and shows unique networks, scan counts, GPS observation counts, and the latest fix. Saves a local WiGLE CSV after a GPS fix. Press **P** to pause or resume. |
+| **[Wardriving](docs/guide.md#wardriving)** | Logs new Wi-Fi BSSIDs and Bluetooth LE addresses to a local CSV. Shows scan counts, satellites in view, and the latest GPS fix. Press **P** to pause or resume. |
 | **[OnlineHashCrack](docs/guide.md#onlinehashcrack)** | Submit WPA hashes from Saved captures, or let Auto send new results after upfront consent. Auto retries temporary connection failures. |
+| **[Lifetime Results](docs/guide.md#lifetime-results)** | View Auto and Manual capture counts and success rates, plus Wardriving discovery totals. Reset counters from the dashboard. |
+| **[SSID allow list](docs/guide.md#settings-and-dashboard)** | Limit Auto and Wardriving Wi-Fi discovery to specific network names. |
 | **[Survey uploads](docs/guide.md#survey-uploads)** | Send GPS-tagged surveys to WiGLE or WDG Wars after Wardriving, or pick a saved survey later. |
 | **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving in GPS circles and filter observations against those zones and the SSID block list before sending. |
 | **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto WiFi Attack, Manual WiFi Attack, and Wardriving. Dashboard indicators use the Cardputer’s live status. |

@@ -19,6 +19,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 import gnss
+import lifetime
 import survey_privacy
 import updater
 import wdgwars
@@ -163,7 +164,7 @@ class Display:
             draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
 
     def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn",
-                  listening_frame=0, location=None, can_pause=False, paused=False):
+                  listening_frame=0, location=None, can_pause=False, paused=False, satellites=None):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
@@ -187,7 +188,7 @@ class Display:
                   anchor="mm", fill=face)
         draw.text((123, 9), phase, font=self.title, fill=TEAL)
         if isinstance(status, wigle.WardriveStatus):
-            self.draw_wardrive_stats(draw, status, location)
+            self.draw_wardrive_stats(draw, status, location, satellites)
         elif isinstance(status, wifi.AttackStatus):
             self.draw_attack_stats(draw, status)
         else:
@@ -239,24 +240,24 @@ class Display:
             draw.rectangle((283, 152, 282 + max(1, int(battery * .19)), 160), fill=color)
         self.paint(image)
 
-    def draw_wardrive_stats(self, draw, status, location):
+    def draw_wardrive_stats(self, draw, status, location, satellites):
         draw.text((124, 32), "Wardriving", font=self.small, fill=MUTED)
-        draw.text((124, 49), f"{status.networks} networks  •  {status.scans} scans",
+        draw.text((124, 49), f"{status.networks} Wi-Fi  •  {status.bluetooth} BLE  •  {status.scans} scans",
                   font=self.body, fill=WHITE)
-        draw.text((124, 66), f"{status.observations} GPS observations", font=self.body, fill=WHITE)
+        count = "—" if satellites is None else str(satellites)
+        draw.text((124, 67), f"Satellites in view: {count}", font=self.body, fill=WHITE)
         if status.phase == "Private":
             draw.text((124, 99), "Private zone: scan paused", font=self.body, fill=TEAL)
             return
         if location:
             latitude, longitude, accuracy, current = location
-            draw.text((124, 87), "GPS fix" if current else "Last GPS fix", font=self.small, fill=TEAL)
+            label = "GPS fix" if current else "Last GPS fix"
+            draw.text((124, 87), f"{label}  •  ~{accuracy} m", font=self.small, fill=TEAL)
             draw.text((124, 102), f"{latitude}, {longitude}", font=self.body, fill=WHITE)
-            if not status.error:
-                draw.text((124, 121), f"Accuracy ~{accuracy} m", font=self.small, fill=MUTED)
         else:
             draw.text((124, 99), "Waiting for GPS fix", font=self.body, fill=MUTED)
         if status.error:
-            draw.text((124, 121), "Scan unavailable; retrying", font=self.small, fill=MUTED)
+            draw.text((124, 121), status.error, font=self.small, fill=MUTED)
 
     def draw_attack_stats(self, draw, status):
         network = status.network
@@ -335,9 +336,48 @@ class App:
     def home(self):
         self.screen("Zerogotchi", items=(
             (AUTO_ATTACK_TITLE, self.auto), ("Wardriving", self.wardriving), (MANUAL_ATTACK_TITLE, self.disclaimer),
-            ("About", self.about),
+            ("Results", self.results), ("About", self.about),
             ("Settings", self.settings), ("Update", self.update), ("Exit", self.exit),
         ), back=self.exit)
+
+    def results(self):
+        self.screen("Lifetime Results", items=(
+            (AUTO_ATTACK_TITLE, lambda: self.mode_results("auto", AUTO_ATTACK_TITLE)),
+            (MANUAL_ATTACK_TITLE, lambda: self.mode_results("manual", MANUAL_ATTACK_TITLE)),
+            ("Wardriving", lambda: self.mode_results("wardriving", "Wardriving")),
+            ("Reset lifetime results", self.confirm_reset_results),
+        ), back=self.home)
+
+    def mode_results(self, mode, title):
+        try:
+            totals = lifetime.results(wifi.DATA, mode)
+        except OSError:
+            self.screen(title, "Could not read lifetime results.", back=self.results)
+            return
+        sessions = totals.get("sessions", 0)
+        if mode == "wardriving":
+            lines = [f"Sessions: {sessions}   Wi-Fi scans: {totals.get('scans', 0)}",
+                     f"New Wi-Fi BSSIDs: {totals.get('networks', 0)}",
+                     f"New Bluetooth LE addresses: {totals.get('bluetooth', 0)}"]
+        else:
+            attempts = totals.get("attempts", 0)
+            successes = totals.get("successes", 0)
+            rate = f"{successes / attempts:.1%}" if attempts else "—"
+            lines = [f"Sessions: {sessions}   Capture attempts: {attempts}",
+                     f"WPA handshakes: {totals.get('handshakes', 0)}",
+                     f"PMKID-only results: {totals.get('pmkids', 0)}",
+                     f"Usable capture success: {rate}"]
+            if mode == "manual":
+                lines.append(f"Deauth-only sessions: {totals.get('deauths', 0)}")
+        self.screen(title, "\n".join(lines), back=self.results)
+
+    def confirm_reset_results(self):
+        def reset():
+            self.work("Lifetime Results", "Resetting counters…", lambda: lifetime.reset(wifi.DATA),
+                      lambda _: self.results(), self.results)
+
+        self.screen("Reset lifetime results", "Set the counters for all three modes back to zero?",
+                    (("Cancel", self.results), ("Reset counters", reset)), self.results)
 
     def auto(self):
         self.screen(AUTO_ATTACK_TITLE, "Auto sends deauth frames on nearby networks. Use it only where you "
@@ -345,7 +385,7 @@ class App:
                     (("Start sweep", self.start_auto), ("Session log", self.auto_log)), back=self.home)
 
     def wardriving(self):
-        self.screen("Wardriving", "Scan for nearby networks and save GPS-tagged observations locally.",
+        self.screen("Wardriving", "Log nearby Wi-Fi and Bluetooth LE discoveries with GPS coordinates.",
                     (("Start", self.start_wardriving), ("Saved surveys", lambda: self.wigle_surveys(self.wardriving))),
                     back=self.home)
 
@@ -366,8 +406,8 @@ class App:
                   re.compile(r"[ -~]{1,256}"), 256, authenticate, self.wardriving, masked=True)
 
     def wardrive_done(self, status):
-        summary = (f"{status.networks} networks in {status.scans} scans. "
-                   f"{status.observations} GPS observations saved.")
+        summary = (f"{status.networks} new Wi-Fi networks and {status.bluetooth} new BLE addresses saved. "
+                   f"{status.scans} Wi-Fi scans.")
         options = (("Exit to main menu", self.home),)
         if status.survey:
             options += self.survey_options(status.survey, lambda: self.wardrive_done(status), self.home)
@@ -427,7 +467,7 @@ class App:
     def about(self):
         self.screen("About", "Zerogotchi by unagisan69\n\n"
                     "A Wi-Fi lab auditor for Cardputer Zero. Auto and Manual WiFi Attack capture WPA handshakes. "
-                    "Wardriving logs GPS observations. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
+                    "Wardriving logs Wi-Fi and Bluetooth LE with GPS. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
                     back=self.home)
 
     def update(self):
@@ -509,8 +549,8 @@ class App:
         def authenticate(password):
             title = wifi.ATTACK_LABELS[mode]
             self.work(title, "Preparing USB adapter…",
-                      lambda: wifi.capture(network, adapter, mode, password, self.cancel,
-                                           lambda _: None, attack_report=self.report_capture),
+                      lambda: wifi.manual_capture(network, adapter, mode, password, self.cancel,
+                                                  self.report_capture),
                       lambda result: self.capture_done(result, back), back, cancellable=True)
             self.auto_status = wifi.AttackStatus("Tuning", title, network)
 
@@ -590,6 +630,10 @@ class App:
         except wifi.WifiError:
             exclusions = "invalid"
         try:
+            inclusions = len(wifi.allowlist())
+        except wifi.WifiError:
+            inclusions = "invalid"
+        try:
             zones = len(survey_privacy.zones())
         except wifi.WifiError:
             zones = "invalid"
@@ -598,7 +642,10 @@ class App:
             (f"Wardriving Adapter: {wifi.read_setting('wardriving-adapter') or 'Built-in'}", self.wardrive_adapter),
             (f"WiFi Adapter: {'Built-in' if adapter == 'wlan0' else adapter or 'unset'}", self.adapter),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
-            (f"SSID block list: {exclusions}", self.edit_block_list),
+            (f"SSID block list: {exclusions}",
+             lambda: self.edit_ssid_list("SSID block list", "ssid-blacklist")),
+            (f"SSID allow list: {inclusions}",
+             lambda: self.edit_ssid_list("SSID allow list", "ssid-allow-list")),
             (f"Private Zones: {zones}", self.private_zones),
             (f"WiGLE: {'credentials saved' if wigle.credentials() else 'not configured'}", self.wigle_settings),
             (f"WDG Wars: {'key saved' if wdgwars.credentials() else 'not configured'}", self.wdgwars_settings),
@@ -657,7 +704,7 @@ class App:
 
     def confirm_survey(self, name, provider, path, back, done):
         self.screen(f"Upload to {name}?",
-                    "Send filtered network names, BSSIDs, signal levels, and GPS locations?",
+                    "Send filtered Wi-Fi and BLE addresses, names, signal levels, and GPS locations?",
                     (("Cancel", back),
                      ("Upload", lambda: self.provider_request(name, lambda: provider.upload(path), done))),
                     back)
@@ -738,9 +785,9 @@ class App:
         current = zones[index] if index is not None else None
         open_editor(f"{current.latitude},{current.longitude},{current.radius}" if current else "")
 
-    def edit_block_list(self):
+    def edit_ssid_list(self, title, setting):
         def open_editor(value):
-            self.edit("SSID block list", "Separate names with commas. Quote names containing commas.",
+            self.edit(title, "Separate names with commas. Quote names containing commas.",
                       re.compile(r"[^\r\n]*"), 1024, save, self.settings, initial=value, tail=True)
 
         def save(value):
@@ -750,10 +797,10 @@ class App:
                 open_editor(value)
                 self.update_editor("Check commas and quotes.")
                 return
-            wifi.save_setting("ssid-blacklist", value)
+            wifi.save_setting(setting, value)
             self.settings()
 
-        open_editor(wifi.read_setting("ssid-blacklist"))
+        open_editor(wifi.read_setting(setting))
 
     def adapter(self):
         self.adapter_menu("WiFi Adapter", "adapter")
@@ -931,6 +978,7 @@ class App:
         last_blink = False
         listening_since = None
         last_listening_frame = 0
+        satellites = None
         try:
             while self.running:
                 if self.future and self.future.done():
@@ -967,6 +1015,9 @@ class App:
                 if self.auto_status:
                     self.poll_device_status(now)
                     if isinstance(self.auto_status, wigle.WardriveStatus):
+                        sat_count = self.gnss.satellites(now) if self.gnss else None
+                        if sat_count != satellites:
+                            satellites, self.dirty = sat_count, True
                         fix = self.gnss.position(now) if self.gnss else None
                         location = self.wardrive_location
                         if fix:
@@ -982,7 +1033,7 @@ class App:
                                            self.battery, self.theme, listening_frame, self.wardrive_location,
                                            can_pause=bool(self.future) and isinstance(
                                                self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus)),
-                                           paused=self.pause.is_set())
+                                           paused=self.pause.is_set(), satellites=satellites)
                     last_listening_frame = listening_frame
                     self.dirty, last_paint, last_blink = False, now, blink
                 elif self.dirty:

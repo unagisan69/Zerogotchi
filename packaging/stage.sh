@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 runtime="$STAGE/usr/lib/zerogotchi"
 install -d -m755 "$runtime"
 install -m755 app/zerogotchi app/radio "$runtime/"
-install -m644 app/wifi.py app/gnss.py app/wigle.py app/wdgwars.py app/survey_privacy.py app/updater.py "$runtime/"
+install -m644 app/*.py "$runtime/"
 for asset in app/themes/*/*.png; do
     install -Dm644 "$asset" "$runtime/${asset#app/}"
 done

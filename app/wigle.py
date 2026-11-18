@@ -13,6 +13,8 @@ import tempfile
 from dataclasses import dataclass
 import uuid
 
+import ble
+import lifetime
 import wifi
 import gnss
 import survey_privacy
@@ -99,7 +101,9 @@ def export_survey(path):
                 writer = csv.writer(output)
                 writer.writerows((metadata, columns))
                 for row in reader:
-                    if len(row) != len(HEADER) or row[1] in ignored or (ignored and not row[1]):
+                    if len(row) != len(HEADER):
+                        continue
+                    if row[-1] == "WIFI" and (row[1] in ignored or (ignored and not row[1])):
                         continue
                     try:
                         latitude, longitude, accuracy = map(float, (row[7], row[8], row[10]))
@@ -209,7 +213,7 @@ def record_survey(position, cancel, pause=None):
     fix = position()
     if interrupted() or fix is None or survey_privacy.private(fix, configured):
         return None
-    networks = wifi.scan(interface="wlan0")
+    networks = wifi.scan(interface="wlan0", allowed=wifi.allowlist())
     signals = rssi_by_bssid()
     fix = position()
     if fix is None or interrupted() or survey_privacy.private(fix, configured):
@@ -229,6 +233,45 @@ class WardriveStatus:
     observations: int = 0
     error: str = ""
     survey: Path | None = None
+    bluetooth: int = 0
+
+
+def seed_seen(connection):
+    # Recover rows from existing surveys, including one saved just before an interrupted DB commit.
+    for path in surveys():
+        try:
+            with path.open(encoding="utf-8", newline="") as source:
+                reader = csv.reader(source)
+                next(reader, None)
+                if next(reader, None) != list(HEADER):
+                    continue
+                connection.executemany(
+                    "INSERT OR IGNORE INTO seen VALUES (?, ?)",
+                    ((row[-1], row[0].upper()) for row in reader
+                     if len(row) == len(HEADER) and row[-1] in ("WIFI", "BLE")
+                     and wifi.MAC_PATTERN.fullmatch(row[0])),
+                )
+        except (OSError, UnicodeError, csv.Error):
+            continue
+
+
+def append_new(connection, survey, rows, now):
+    new_rows = []
+    for row in rows:
+        inserted = connection.execute("INSERT OR IGNORE INTO seen VALUES (?, ?)", (row[-1], row[0]))
+        if inserted.rowcount:
+            new_rows.append(row)
+    if new_rows:
+        survey = append_survey(survey, new_rows, now)
+    added_wifi = sum(row[-1] == "WIFI" for row in new_rows)
+    return survey, added_wifi, len(new_rows) - added_wifi
+
+
+def bluetooth_rows(devices, fix, now):
+    return [(address, name, "[BLE]", now.strftime("%Y-%m-%d %H:%M:%S"), 0, 0, signal,
+             f"{fix.latitude:.7f}", f"{fix.longitude:.7f}", f"{fix.altitude:.1f}",
+             f"{fix.accuracy:.1f}", "", "", "BLE")
+            for address, name, signal in devices]
 
 
 def wardrive(interface, position, cancel, report, *, interval=12, pause=None):
@@ -236,46 +279,64 @@ def wardrive(interface, position, cancel, report, *, interval=12, pause=None):
         Path("/sys/class/net") / interface / "phy80211"
     ).exists():
         raise wifi.WifiError(f"WiFi adapter {interface} is unavailable")
-    seen = set()
-    scans = observations = 0
+    scans = networks_logged = bluetooth_logged = 0
     survey = None
     configured = survey_privacy.zones()
-    def show_pause():
-        report(WardriveStatus("Paused", scans, len(seen), observations))
+    allowed = wifi.allowlist()
 
-    while wifi.wait_while_paused(cancel, pause, show_pause):
-        first_fix = position()
-        if configured and (first_fix is None or survey_privacy.private(first_fix, configured)):
-            phase = "Locating" if first_fix is None else "Private"
-            report(WardriveStatus(phase, scans, len(seen), observations))
+    with lifetime.database(wifi.DATA) as connection:
+        seed_seen(connection)
+        lifetime.increment(connection, "wardriving", sessions=1)
+
+    def status(phase, error=""):
+        return WardriveStatus(phase, scans, networks_logged, networks_logged + bluetooth_logged,
+                              error, survey, bluetooth_logged)
+
+    def interrupted():
+        return cancel.is_set() or (pause is not None and pause.is_set())
+
+    def public_fix():
+        fix = position()
+        return fix if fix is not None and not survey_privacy.private(fix, configured) else None
+
+    while wifi.wait_while_paused(cancel, pause, lambda: report(status("Paused"))):
+        if configured and public_fix() is None:
+            report(status("Private" if position() else "Locating"))
             wifi.wait_until_pause_or_cancel(cancel, pause, min(2, interval))
             continue
-        report(WardriveStatus("Scanning", scans, len(seen), observations))
+        report(status("Scanning"))
+        rows = []
         error = ""
+        scanned = 0
         try:
-            networks = wifi.scan(interface=interface)
-            scan_fix = position()
-            if cancel.is_set():
-                break
-            if pause is not None and pause.is_set():
-                continue
-            if configured and (scan_fix is None or survey_privacy.private(scan_fix, configured)):
-                continue
-            scans += 1
-            seen.update(network.bssid for network in networks)
-            if scan_fix is not None and not cancel.is_set():
+            networks = wifi.scan(interface=interface, allowed=allowed)
+            scanned = 1
+            if not interrupted() and public_fix() is not None:
                 signals = rssi_by_bssid(interface)
-                fix = position()
-                if (fix is not None and not cancel.is_set() and not survey_privacy.private(fix, configured)
-                        and (pause is None or not pause.is_set())):
-                    now = datetime.now(timezone.utc)
-                    rows = survey_rows(networks, signals, fix, now)
-                    if rows:
-                        survey = append_survey(survey, rows, now)
-                        observations += len(rows)
+                fix = public_fix()
+                if fix is not None:
+                    rows.extend(survey_rows(networks, signals, fix, datetime.now(timezone.utc)))
         except wifi.WifiError as failure:
             error = str(failure)
-        phase = "Retrying" if error else "Listening" if position() else "Locating"
-        report(WardriveStatus(phase, scans, len(seen), observations, error))
+
+        if not interrupted() and public_fix() is not None:
+            report(status("Listening", error))
+            devices, bluetooth_error = ble.scan(lambda: interrupted() or public_fix() is None)
+            fix = public_fix()
+            if fix is not None:
+                rows.extend(bluetooth_rows(devices, fix, datetime.now(timezone.utc)))
+            error = error or bluetooth_error
+        if interrupted() or (configured and public_fix() is None):
+            continue
+
+        with lifetime.database(wifi.DATA) as connection:
+            survey, added_wifi, added_bluetooth = append_new(
+                connection, survey, rows, datetime.now(timezone.utc))
+            lifetime.increment(connection, "wardriving", scans=scanned, networks=added_wifi,
+                               bluetooth=added_bluetooth)
+        scans += scanned
+        networks_logged += added_wifi
+        bluetooth_logged += added_bluetooth
+        report(status("Listening" if position() else "Locating", error))
         wifi.wait_until_pause_or_cancel(cancel, pause, interval)
-    return WardriveStatus("Stopped", scans, len(seen), observations, survey=survey)
+    return status("Stopped")

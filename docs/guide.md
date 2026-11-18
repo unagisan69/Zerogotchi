@@ -74,16 +74,31 @@ OnlineHashCrack tasks stay available.
 
 1. Select **Wardriving → Start** and enter your Cardputer user password to
    power GPS.
-2. Watch completed scans, unique networks, logged GPS observations, and your
-   latest latitude and longitude. A stale position is labeled **Last GPS fix**.
+2. Watch completed scans, new Wi-Fi and Bluetooth LE addresses, satellites in
+   view, and your latest latitude and longitude. A stale position is labeled **Last GPS fix**.
 3. Press **Esc** to stop. With a saved survey, the summary offers each upload
    service that has credentials configured, along with **Exit to main menu**.
    Find local reports later under **Wardriving → Saved surveys**.
 
-Wardriving repeatedly scans with NetworkManager and respects the SSID
-block list. With a fresh fix, it adds observations with measured signal levels
-to one local WiGLE CSV per session. This scanning-only mode has its own
-adapter setting and defaults to the onboard `wlan0`.
+Wardriving scans Wi-Fi through NetworkManager and Bluetooth LE through the
+built-in Bluetooth controller. With a fresh GPS fix, it saves each new BSSID
+or BLE address with measured signal strength and coordinates in a local WiGLE
+CSV. The address index survives app restarts and also imports addresses from
+existing local surveys. BLE devices that rotate addresses may appear more than
+once. The Wi-Fi adapter defaults to the onboard `wlan0` and can be changed
+in Settings.
+
+## Lifetime Results
+
+Open **Results** from the main menu. Auto and Manual show sessions, completed
+capture attempts, WPA handshakes, PMKID-only results, and the percentage of
+attempts that saved either usable result. Manual also shows deauth-only
+sessions. Canceled attempts count if they saved usable material. Wardriving
+shows sessions, completed Wi-Fi scans, and new Wi-Fi and BLE addresses saved.
+
+Counters start with this version. **Reset lifetime results** clears the
+counters for all three modes. Saved captures, surveys, and the Wardriving
+address index are retained.
 
 ## Settings and dashboard
 
@@ -92,6 +107,7 @@ adapter setting and defaults to the onboard `wlan0`.
 | **Theme** | Choose the default Acidburn portraits, the animated Computer face, or Zero Cool. The setting applies to Auto and Wardriving. |
 | **WiFi Adapter** | Set the radio for Auto and Manual WiFi Attack. |
 | **Wardriving Adapter** | Choose the Wardriving interface independently. |
+| **SSID allow list** | Enter case-sensitive, comma-separated SSIDs for Auto WiFi Attack and Wardriving. Quote names containing commas. Leave empty to discover all Wi-Fi names. The block list takes precedence. The Wi-Fi radio may still hear other broadcasts. Bluetooth LE observations use addresses and have no SSID. |
 | **SSID block list** | Enter case-sensitive, comma-separated SSIDs. Quote a name that contains commas. With a block list enabled, hidden SSIDs are excluded when their names cannot be checked. |
 | **Private Zones** | Add GPS circles where survey recording pauses. |
 | **OnlineHashCrack API key** | Save a masked key for WPA hash submissions. |
@@ -145,7 +161,8 @@ from your WDG Wars account. **Test API key** verifies access through the profile
 endpoint. The app stores the key in an owner-only settings file.
 
 Choose a destination when Wardriving ends or select a file under **Saved surveys**.
-Confirm to send the filtered BSSIDs, SSIDs, signal levels, and GPS coordinates.
+Confirm to send the filtered Wi-Fi and BLE addresses, names, signal levels,
+and GPS coordinates.
 WDG Wars uses its CSV upload endpoint. Survey accuracy is estimated from the
 receiver’s HDOP. WPA hash submissions use the separate OnlineHashCrack flow.
 
@@ -153,6 +170,7 @@ receiver’s HDOP. WPA hash submissions use the separate OnlineHashCrack flow.
 
 | Data | Default location |
 | --- | --- |
+| Lifetime results and Wardriving address index | `~/.local/share/zerogotchi/results.sqlite3` |
 | Captures and hashes | `~/.local/share/zerogotchi/captures/` |
 | WiGLE surveys | `~/.local/share/zerogotchi/wigle/` |
 | Latest Auto session log | `~/.local/share/zerogotchi/auto-session.log` |

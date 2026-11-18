@@ -16,6 +16,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+import lifetime
+
+
 API_URL = "https://api.onlinehashcrack.com/v2"
 KEY_PATTERN = re.compile(r"sk_[A-Za-z0-9]{32,64}")
 MAC_PATTERN = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
@@ -124,15 +127,53 @@ def split_nmcli(line):
     return fields
 
 
-def scan(*, include_ignored=False, interface=None):
+def last_scan(interface, environment):
+    device = subprocess.check_output(
+        ["nmcli", "-g", "GENERAL.DBUS-PATH", "device", "show", interface],
+        env=environment, text=True, stderr=subprocess.DEVNULL, timeout=3,
+    ).strip()
+    return subprocess.check_output(
+        ["busctl", "--system", "get-property", "org.freedesktop.NetworkManager", device,
+         "org.freedesktop.NetworkManager.Device.Wireless", "LastScan"],
+        env=environment, stderr=subprocess.DEVNULL, timeout=3,
+    )
+
+
+def scan(*, include_ignored=False, interface=None, allowed=None):
     if interface is None and read_setting("adapter") == "wlan0":
         interface = "wlan0"
     device = ["ifname", interface] if interface else []
+    environment = {**os.environ, "LC_ALL": "C"}
     try:
+        if allowed:
+            permitted = allowed - blacklist()
+            if not permitted:
+                return []
+            try:
+                previous = last_scan(interface, environment)
+            except (OSError, subprocess.SubprocessError):
+                previous = None
+            directed = [argument for name in sorted(permitted) for argument in ("ssid", name)]
+            request = subprocess.run(
+                ["nmcli", "--wait", "12", "device", "wifi", "rescan", *device, *directed],
+                env=environment, capture_output=True, timeout=14,
+            )
+            # NetworkManager rate-limits rescans and keeps the previous scan available.
+            if request.returncode and b"scanning not allowed" not in request.stderr.lower():
+                raise WifiError("Directed Wi-Fi scan failed")
+            if not request.returncode:
+                if previous is None:
+                    time.sleep(3)
+                else:
+                    deadline = time.monotonic() + 8
+                    while time.monotonic() < deadline:
+                        time.sleep(0.25)
+                        if last_scan(interface, environment) != previous:
+                            break
         result = subprocess.run(
             ["nmcli", "-t", "-e", "yes", "-f", "BSSID,SSID,FREQ,SIGNAL,SECURITY",
-             "device", "wifi", "list", *device, "--rescan", "yes"],
-            env={**os.environ, "LC_ALL": "C"}, capture_output=True, text=True,
+             "device", "wifi", "list", *device, "--rescan", "no" if allowed else "yes"],
+            env=environment, capture_output=True, text=True,
             errors="replace", timeout=20, check=True,
         )
     except (subprocess.SubprocessError, OSError) as error:
@@ -147,6 +188,8 @@ def scan(*, include_ignored=False, interface=None):
         try:
             network = Network(bssid.upper(), ssid, int(freq.split()[0]), int(signal), security)
         except (ValueError, IndexError):
+            continue
+        if allowed and network.ssid not in allowed:
             continue
         if network.bssid not in by_bssid or network.signal > by_bssid[network.bssid].signal:
             by_bssid[network.bssid] = network
@@ -188,6 +231,13 @@ def blacklist():
         return parse_blacklist(read_setting("ssid-blacklist"))
     except csv.Error as error:
         raise WifiError("Fix the SSID block list in Settings") from error
+
+
+def allowlist():
+    try:
+        return parse_blacklist(read_setting("ssid-allow-list"))
+    except csv.Error as error:
+        raise WifiError("Fix the SSID allow list in Settings") from error
 
 
 def is_ignored(network, ignored):
@@ -415,6 +465,22 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
             folder.rmdir()
 
 
+def manual_capture(network, interface, mode, password, cancel, report):
+    lifetime.add(DATA, "manual", sessions=1, deauths=int(mode == "deauth"))
+    try:
+        result = capture(network, interface, mode, password, cancel, lambda _: None,
+                         attack_report=report)
+    except AuthenticationError:
+        raise
+    except WifiError:
+        if mode != "deauth" and not cancel.is_set():
+            lifetime.capture(DATA, "manual")
+        raise
+    if mode != "deauth":
+        lifetime.capture(DATA, "manual", result[2], attempted=not cancel.is_set())
+    return result
+
+
 def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25, pause=None):
     AUTO_LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(AUTO_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -426,6 +492,7 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
 
         log(f"Auto started on {interface}, target dwell {target_seconds}s")
         try:
+            lifetime.add(DATA, "auto", sessions=1)
             return run_auto(interface, password, cancel, report, log, auto_upload, target_seconds, pause)
         except (WifiError, OSError) as error:
             log(f"Session ended with error: {error}")
@@ -448,7 +515,8 @@ def skip_reason(network, ignored, captured, channels):
 
 
 def run_auto(interface, password, cancel, report, log, auto_upload, target_seconds, pause=None):
-    nearby = scan(include_ignored=True)
+    allowed = allowlist()
+    nearby = scan(include_ignored=True, allowed=allowed, interface="wlan0" if allowed else None)
     channels = supported_channels(interface)
     captured = {bssid for _, bssids in saved_handshakes() for bssid in bssids}
     ignored = blacklist()
@@ -529,7 +597,7 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
                     while ready(network.ssid):
                         try:
                             report(status("Tuning", network.ssid))
-                            _, hashes, _ = run_target(mode, dwell)
+                            _, hashes, kind = run_target(mode, dwell)
                             break
                         except CapturePaused:
                             continue
@@ -545,14 +613,17 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
                     raise
                 except EmptyCapture:
                     if not cancel.is_set():
+                        lifetime.capture(DATA, "auto")
                         skipped += 1
                         log(f"Skip {network.bssid}: no packets after retry")
                 except WifiError as error:
                     if not cancel.is_set():
+                        lifetime.capture(DATA, "auto")
                         failed += 1
                         log(f"Failed {network.bssid}: {error}")
                         report(status("Skipping", str(error)))
                 else:
+                    lifetime.capture(DATA, "auto", kind, attempted=not cancel.is_set())
                     found += int(hashes is not None)
                     log(f"{network.bssid}: {'usable hash saved' if hashes else 'PCAP saved; no usable hash'}")
                     if hashes and auto_upload:

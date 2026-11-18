@@ -61,12 +61,26 @@ def parse_fix(line, now):
         return None
 
 
+def parse_satellites(line):
+    fields = line[:-3].split(b",")
+    try:
+        count = int(fields[3])
+        part = int(fields[2])
+    except (IndexError, ValueError):
+        return None
+    if part != 1 or not 0 <= count <= 255:
+        return None
+    talker = fields[0][1:3]
+    return (b"GB" if talker == b"BD" else talker), count
+
+
 class GnssMonitor:
     def __init__(self, helper, password):
         self.fd = self.saved = self.power = None
         self.partial = b""
         self.last_seen = float("-inf")
         self.fix = None
+        self.in_view = {}
         try:
             if not PORT.exists() or not RAIL.exists():
                 return
@@ -109,11 +123,23 @@ class GnssMonitor:
                     self.last_seen = now
                     if line[3:6] == b"GGA":
                         self.fix = parse_fix(line, now)
+                    elif line[3:6] == b"GSV":
+                        observation = parse_satellites(line)
+                        if observation:
+                            talker, count = observation
+                            self.in_view[talker] = count, now
         return now - self.last_seen < 5
 
     def position(self, now):
         fix = self.fix
         return fix if fix and now - fix.received_at < 5 else None
+
+    def satellites(self, now):
+        fresh = {talker: count for talker, (count, timestamp) in self.in_view.items()
+                 if now - timestamp < 10}
+        if not fresh:
+            return None
+        return fresh[b"GN"] if b"GN" in fresh else sum(fresh.values())
 
     def close(self):
         if self.fd is not None:
