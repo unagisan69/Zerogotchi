@@ -201,19 +201,22 @@ def append_survey(path, rows, now):
             temporary.unlink(missing_ok=True)
 
 
-def record_survey(position, cancel):
+def record_survey(position, cancel, pause=None):
     configured = survey_privacy.zones()
+    def interrupted():
+        return cancel.is_set() or (pause is not None and pause.is_set())
+
     fix = position()
-    if cancel.is_set() or fix is None or survey_privacy.private(fix, configured):
+    if interrupted() or fix is None or survey_privacy.private(fix, configured):
         return None
     networks = wifi.scan(interface="wlan0")
     signals = rssi_by_bssid()
     fix = position()
-    if fix is None or cancel.is_set() or survey_privacy.private(fix, configured):
+    if fix is None or interrupted() or survey_privacy.private(fix, configured):
         return None
     now = datetime.now(timezone.utc)
     rows = survey_rows(networks, signals, fix, now)
-    if rows and not cancel.is_set():
+    if rows and not interrupted():
         return append_survey(None, rows, now)
     return None
 
@@ -228,7 +231,7 @@ class WardriveStatus:
     survey: Path | None = None
 
 
-def wardrive(interface, position, cancel, report, *, interval=12):
+def wardrive(interface, position, cancel, report, *, interval=12, pause=None):
     if not (Path("/sys/class/net") / interface / "wireless").exists() and not (
         Path("/sys/class/net") / interface / "phy80211"
     ).exists():
@@ -237,12 +240,15 @@ def wardrive(interface, position, cancel, report, *, interval=12):
     scans = observations = 0
     survey = None
     configured = survey_privacy.zones()
-    while not cancel.is_set():
+    def show_pause():
+        report(WardriveStatus("Paused", scans, len(seen), observations))
+
+    while wifi.wait_while_paused(cancel, pause, show_pause):
         first_fix = position()
         if configured and (first_fix is None or survey_privacy.private(first_fix, configured)):
             phase = "Locating" if first_fix is None else "Private"
             report(WardriveStatus(phase, scans, len(seen), observations))
-            cancel.wait(min(2, interval))
+            wifi.wait_until_pause_or_cancel(cancel, pause, min(2, interval))
             continue
         report(WardriveStatus("Scanning", scans, len(seen), observations))
         error = ""
@@ -251,6 +257,8 @@ def wardrive(interface, position, cancel, report, *, interval=12):
             scan_fix = position()
             if cancel.is_set():
                 break
+            if pause is not None and pause.is_set():
+                continue
             if configured and (scan_fix is None or survey_privacy.private(scan_fix, configured)):
                 continue
             scans += 1
@@ -258,7 +266,8 @@ def wardrive(interface, position, cancel, report, *, interval=12):
             if scan_fix is not None and not cancel.is_set():
                 signals = rssi_by_bssid(interface)
                 fix = position()
-                if fix is not None and not cancel.is_set() and not survey_privacy.private(fix, configured):
+                if (fix is not None and not cancel.is_set() and not survey_privacy.private(fix, configured)
+                        and (pause is None or not pause.is_set())):
                     now = datetime.now(timezone.utc)
                     rows = survey_rows(networks, signals, fix, now)
                     if rows:
@@ -268,5 +277,5 @@ def wardrive(interface, position, cancel, report, *, interval=12):
             error = str(failure)
         phase = "Retrying" if error else "Listening" if position() else "Locating"
         report(WardriveStatus(phase, scans, len(seen), observations, error))
-        cancel.wait(interval)
+        wifi.wait_until_pause_or_cancel(cancel, pause, interval)
     return WardriveStatus("Stopped", scans, len(seen), observations, survey=survey)

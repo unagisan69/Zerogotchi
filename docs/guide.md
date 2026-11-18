@@ -10,6 +10,12 @@ Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go
 back or stop. Use Auto and Attack only on networks and clients you own or are
 authorized to test.
 
+Press **P** on an active Auto or Wardriving dashboard to pause, then press
+**P** again to resume. Auto saves any packets received before the pause and
+retries the same target on resume if it still needs a usable result.
+Wardriving finishes an in-progress scan and discards its results if paused.
+**Esc** still ends the session while paused.
+
 ## Auto
 
 1. Select **Auto → Start sweep** and confirm the scope.

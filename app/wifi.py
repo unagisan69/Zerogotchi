@@ -38,6 +38,29 @@ class EmptyCapture(WifiError):
     pass
 
 
+class CapturePaused(WifiError):
+    pass
+
+
+def wait_while_paused(cancel, pause, on_pause):
+    if pause is not None and pause.is_set() and not cancel.is_set():
+        on_pause()
+        while pause.is_set() and not cancel.wait(0.2):
+            pass
+    return not cancel.is_set()
+
+
+def wait_until_pause_or_cancel(cancel, pause, seconds):
+    if pause is None:
+        cancel.wait(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while not pause.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or cancel.wait(min(0.2, remaining)):
+            break
+
+
 class UploadRetry(WifiError):
     def __init__(self, message, delay=60):
         super().__init__(message)
@@ -251,7 +274,7 @@ def supported_channels(interface):
 
 
 def capture(network, interface, mode, password, cancel, report, *, time_limit=None,
-            radio_report=None, monitor=None, attack_report=None):
+            radio_report=None, monitor=None, attack_report=None, pause=None):
     if not interface:
         raise WifiError("Set capture adapter in Settings")
     if interface == "wlan0":
@@ -270,6 +293,7 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
     if monitor:
         args.append(monitor)
     hashes = []
+    paused = False
     try:
         with (
             open(pcap or os.devnull, "xb" if pcap else "wb") as output,
@@ -294,6 +318,9 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                 last_report = None
                 try:
                     while process.poll() is None and not cancel.wait(0.2):
+                        if pause is not None and pause.is_set():
+                            paused = True
+                            break
                         if os.pread(errors.fileno(), 4096, 0).count(prompt) > 1:
                             break
                         now = time.monotonic()
@@ -363,6 +390,8 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
         if not pcap:
             return None, None, ""
         if pcap.stat().st_size <= 24:
+            if paused:
+                raise CapturePaused()
             raise EmptyCapture("Stopped. No packets were captured.")
         (folder / "network.json").write_text(json.dumps({"ssid": network.ssid}), encoding="utf-8")
         if not hashes:
@@ -372,6 +401,8 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                 except (OSError, UnicodeError, subprocess.SubprocessError) as error:
                     raise WifiError("Hash conversion failed. PCAP saved.") from error
         if not hashes:
+            if paused:
+                raise CapturePaused()
             return pcap, None, ""
         hashfile = pcap.with_suffix(".hc22000")
         hashfile.write_text("\n".join(hashes) + "\n", encoding="ascii")
@@ -384,7 +415,7 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
             folder.rmdir()
 
 
-def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25):
+def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25, pause=None):
     AUTO_LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(AUTO_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as output:
@@ -395,7 +426,7 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
 
         log(f"Auto started on {interface}, target dwell {target_seconds}s")
         try:
-            return run_auto(interface, password, cancel, report, log, auto_upload, target_seconds)
+            return run_auto(interface, password, cancel, report, log, auto_upload, target_seconds, pause)
         except (WifiError, OSError) as error:
             log(f"Session ended with error: {error}")
             raise
@@ -416,7 +447,7 @@ def skip_reason(network, ignored, captured, channels):
     return ""
 
 
-def run_auto(interface, password, cancel, report, log, auto_upload, target_seconds):
+def run_auto(interface, password, cancel, report, log, auto_upload, target_seconds, pause=None):
     nearby = scan(include_ignored=True)
     channels = supported_channels(interface)
     captured = {bssid for _, bssids in saved_handshakes() for bssid in bssids}
@@ -440,9 +471,16 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
         return AutoStatus(phase, network, attempted, len(targets), found, skipped,
                           failed, uploaded, len(queue), upload_failed, deauths_total)
 
+    def ready(network=""):
+        def show_pause():
+            log("Paused")
+            report(status("Paused", network))
+        return wait_while_paused(cancel, pause, show_pause)
+
     def send_pending(phase):
         nonlocal uploaded, upload_failed, next_upload
-        while queue and not cancel.is_set() and time.monotonic() >= next_upload:
+        while (queue and not cancel.is_set() and (pause is None or not pause.is_set())
+               and time.monotonic() >= next_upload):
             report(status(phase))
             try:
                 accepted, skipped_count, rejected = upload(queue[0])
@@ -459,14 +497,13 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
                 log(f"OnlineHashCrack result: accepted {accepted}, skipped {skipped_count}, rejected {rejected}")
             queue.pop(0)
 
-    if targets and not cancel.is_set():
+    if targets and ready():
         report(status("Preparing"))
         with auto_monitor(interface, password, cancel) as monitor:
             for network in targets:
-                if cancel.is_set():
+                if not ready(network.ssid):
                     break
                 attempted += 1
-                report(status("Tuning", network.ssid))
                 mode = "active" if channels[network.frequency] and network.frequency < 5925 else "passive"
                 log(f"Target {network.ssid!r} {network.bssid} {network.frequency} MHz: {mode}")
 
@@ -484,17 +521,26 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
 
                     return capture(network, interface, mode, password, cancel, lambda message: None,
                                    time_limit=seconds, monitor=monitor,
-                                   radio_report=radio_update)
+                                   radio_report=radio_update, pause=pause)
 
                 try:
-                    try:
-                        _, hashes, _ = run_target(mode, target_seconds)
-                    except EmptyCapture:
-                        if cancel.is_set():
+                    dwell = target_seconds
+                    retried = False
+                    while ready(network.ssid):
+                        try:
+                            report(status("Tuning", network.ssid))
+                            _, hashes, _ = run_target(mode, dwell)
                             break
-                        report(status("Retrying", network.ssid))
-                        log(f"{network.bssid}: no packets; retrying passively")
-                        _, hashes, _ = run_target("passive", min(8, target_seconds))
+                        except CapturePaused:
+                            continue
+                        except EmptyCapture:
+                            if cancel.is_set() or retried:
+                                raise
+                            report(status("Retrying", network.ssid))
+                            log(f"{network.bssid}: no packets; retrying passively")
+                            mode, dwell, retried = "passive", min(8, target_seconds), True
+                    else:
+                        break
                 except AuthenticationError:
                     raise
                 except EmptyCapture:
@@ -515,10 +561,9 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
     del password
     log(f"Sweep ended: {attempted} attempted, {found} hashes, {skipped} skipped, "
         f"{failed} failed, {deauths_total} deauth bursts")
-    while queue and not cancel.is_set():
+    while queue and ready():
         report(status("Idling"))
-        if cancel.wait(max(0, next_upload - time.monotonic())):
-            break
+        wait_until_pause_or_cancel(cancel, pause, max(0, next_upload - time.monotonic()))
         send_pending("Idling")
     phase = "Stopped" if cancel.is_set() else "Idling"
     log(f"{phase}: {uploaded} uploaded, {len(queue)} queued, {upload_failed} upload failures")

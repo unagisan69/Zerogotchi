@@ -4,6 +4,7 @@
 import concurrent.futures
 from collections import deque
 import csv
+from dataclasses import replace
 import fcntl
 from functools import lru_cache
 import os
@@ -30,6 +31,7 @@ BG, PANEL, TEAL, WHITE, MUTED = "#101c25", "#234145", "#6fffc1", "#f4f9fa", "#ae
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 INPUT_EVENT = struct.Struct("@llHHi")
 KEY_ESC, KEY_ENTER, KEY_UP, KEY_DOWN, KEY_BACKSPACE = 1, 28, 103, 108, 14
+KEY_P = 25
 KEYS = {
     **dict(enumerate("1234567890-=", 2)),
     **dict(enumerate("qwertyuiop[]", 16)),
@@ -48,6 +50,7 @@ ACIDBURN_MOODS = {
     "Checking": "happy",
     "Deauthing": "angry",
     "Idling": "sleepy",
+    "Paused": "sleepy",
     "Retrying": "surprised",
     "Saving": "happy",
     "Skipping": "sad",
@@ -134,8 +137,8 @@ class Display:
 
     def draw_computer(self, draw, phase, blink):
         face = TEAL
-        resting = phase == "Idling"
-        mood = {"Idling": "sleep", "Deauthing": "focus", "Checking": "squint",
+        resting = phase in ("Idling", "Paused")
+        mood = {"Idling": "sleep", "Paused": "sleep", "Deauthing": "focus", "Checking": "squint",
                 "Saving": "happy", "Uploading": "focus"}.get(phase, "alert")
         tilt = -3 if blink and not resting else 0
         draw.line((59, 44, 67, 33 + tilt, 75, 33 + tilt), fill=face, width=3)
@@ -157,12 +160,13 @@ class Display:
         else:
             draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
 
-    def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn", listening_frame=0, location=None):
+    def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn",
+                  listening_frame=0, location=None, can_pause=False, paused=False):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
         phase = status.phase
-        resting = phase == "Idling"
+        resting = phase in ("Idling", "Paused")
         face = TEAL
         caption_y = 110
         if theme in LISTENING_FRAMES:
@@ -207,7 +211,10 @@ class Display:
                 draw.text((124, 125), f"{status.uploaded} uploaded  •  {status.queued} queued",
                           font=self.small, fill=MUTED)
         draw.line((12, 142, 308, 142), fill=PANEL)
-        draw.text((12, 150), "Esc Back" if resting else "Esc to stop", font=self.small, fill=MUTED)
+        footer = "Esc Back" if resting else "Esc to stop"
+        if can_pause:
+            footer = ("P Resume" if paused else "P Pause") + "   /   Esc to stop"
+        draw.text((12, 150), footer, font=self.small, fill=MUTED)
         gps_color = TEAL if gps_on else MUTED
         net_color = TEAL if online else MUTED
         # All three symbols occupy the same 14-pixel band.
@@ -297,6 +304,7 @@ class App:
         self.keyboard = keyboard
         self.executor = executor
         self.cancel = threading.Event()
+        self.pause = threading.Event()
         self.future = None
         theme = wifi.read_setting("theme")
         self.theme = theme if theme in THEMES else "acidburn"
@@ -348,7 +356,7 @@ class App:
             self.wardrive_location = None
             self.work("Wardriving", "",
                       lambda: wigle.wardrive(adapter, lambda: monitor.position(time.monotonic()),
-                                             self.cancel, self.report_capture),
+                                             self.cancel, self.report_capture, pause=self.pause),
                       self.wardrive_done, self.wardriving, cancellable=True)
             self.auto_status = wigle.WardriveStatus("Scanning")
 
@@ -400,7 +408,7 @@ class App:
             self.next_survey = 0 if wigle.credentials() else float("inf")
             self.work("Auto", "",
                       lambda: wifi.auto_capture(adapter, password, self.cancel, self.report_capture,
-                                                auto_upload=auto_upload),
+                                                auto_upload=auto_upload, pause=self.pause),
                       self.auto_done, self.auto, cancellable=True)
             self.auto_status = wifi.AutoStatus("Scanning")
 
@@ -818,6 +826,7 @@ class App:
 
     def work(self, title, prompt, operation, success, back, *, cancellable=False):
         self.cancel.clear()
+        self.pause.clear()
         self.capture_update = None
         self.future = self.executor.submit(operation)
         self.finished, self.failed = success, back
@@ -830,7 +839,17 @@ class App:
         if state != 1:
             return
         if self.future:
-            if self.cancellable and code == KEY_ESC:
+            if (code == KEY_P and not self.cancel.is_set()
+                    and isinstance(self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus))):
+                if self.pause.is_set():
+                    self.pause.clear()
+                    self.auto_status = replace(self.auto_status, phase="Resuming")
+                else:
+                    self.pause.set()
+                    self.auto_status = replace(self.auto_status, phase="Pausing")
+                self.capture_update = None
+                self.dirty = True
+            elif self.cancellable and code == KEY_ESC:
                 self.cancel.set()
                 if isinstance(self.auto_status, wigle.WardriveStatus):
                     self.screen("Stopping Wardriving", "Finishing the current scan…", footer="Please wait")
@@ -896,10 +915,10 @@ class App:
                 except (wifi.WifiError, OSError):
                     pass
         monitor = self.gnss
-        if monitor and monitor.position(now) and now >= self.next_survey:
+        if not self.pause.is_set() and monitor and monitor.position(now) and now >= self.next_survey:
             self.next_survey = now + 15
             future = self.survey_executor.submit(
-                wigle.record_survey, lambda: monitor.position(time.monotonic()), self.survey_cancel
+                wigle.record_survey, lambda: monitor.position(time.monotonic()), self.survey_cancel, self.pause
             )
             self.survey_job = future, self.survey_cancel
 
@@ -958,7 +977,10 @@ class App:
                         self.poll_survey(now)
                 if self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
                     self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,
-                                           self.battery, self.theme, listening_frame, self.wardrive_location)
+                                           self.battery, self.theme, listening_frame, self.wardrive_location,
+                                           can_pause=bool(self.future) and isinstance(
+                                               self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus)),
+                                           paused=self.pause.is_set())
                     last_listening_frame = listening_frame
                     self.dirty, last_paint, last_blink = False, now, blink
                 elif self.dirty:
