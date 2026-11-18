@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.8
+tag=v0.4.9
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt
@@ -75,3 +75,24 @@ sudo apt install ./build/zerogotchi_*_all.deb
 Build from a fresh checkout, or run `make clean` first if the build directory
 contains packages from earlier versions. Remove the installed package with
 `sudo apt remove zerogotchi`.
+
+### Build with CardputerZero AppBuilder
+
+Zerogotchi follows the [AppBuilder Python framebuffer example](https://github.com/CardputerZero/AppBuilder/tree/main/examples/Python_FrameBuffer_HelloWorld).
+From the Zerogotchi checkout on Linux:
+
+```sh
+git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
+make appbuilder-package APPBUILDER=../AppBuilder
+sudo apt install ./build/appbuilder/zerogotchi_*_all.deb
+```
+
+Both package commands share the same metadata, staging hook, icon, and desktop
+template. The launcher starts the foreground app via
+`/usr/share/APPLaunch/bin/zerogotchi`. Python modules and theme assets live in
+`/usr/lib/zerogotchi/`, and the package declares its Debian runtime dependencies.
+
+Use AppBuilder's `scripts/pack-deb.sh` path for this project. The generic
+**Build DEB Package** workflow targets SCons projects and its packer produces
+a different package layout. AppStore publication is a separate step that
+requires Store listing metadata, a declared license, and first-release review.

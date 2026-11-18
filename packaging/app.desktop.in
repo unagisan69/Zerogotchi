@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name={{APP_NAME}}
+Comment=Wi-Fi auditing for Cardputer Zero
+Exec={{APP_EXEC}}
+Icon={{APP_ICON}}
+Terminal={{APP_TERMINAL}}
