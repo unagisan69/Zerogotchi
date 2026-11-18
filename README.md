@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="app/themes/acidburn/neutral.png" width="112" height="112" alt="Zerogotchi Acidburn portrait">
-</p>
-
 <h1 align="center">Zerogotchi</h1>
 
 <p align="center">
