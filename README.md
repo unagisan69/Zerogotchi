@@ -55,3 +55,5 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 The **built-in Wi-Fi adapter** supports scanning and Wardriving on the stock driver. **Capture and deauth** require a USB adapter that supports monitor mode and, for deauth, injection. **GPS-tagged surveys** require a GNSS HAT with a position fix.
 
 Use Auto and Attack only on networks and equipment you own or are authorized to test. The optional [wifit3 companion](docs/companion.md) provides additional lab methods, including active PMKID association, WPS recovery, WEP, and experimental WPA3 downgrade.
+
+Zerogotchi and its bundled theme artwork are available under the [MIT License](LICENSE).

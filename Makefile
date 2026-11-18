@@ -9,7 +9,7 @@ PACKAGING = $(wildcard packaging/*)
 all: package
 package: $(PACKAGE)
 
-$(PACKAGE): $(SOURCES) $(PACKAGING) Makefile
+$(PACKAGE): $(SOURCES) $(PACKAGING) LICENSE Makefile
 	rm -rf $(STAGE)
 	install -d -m755 $(STAGE)/DEBIAN
 	set -e; . ./packaging/meta.env; \

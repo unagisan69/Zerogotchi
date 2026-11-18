@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.9
+tag=v0.4.10
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt
@@ -94,5 +94,5 @@ template. The launcher starts the foreground app via
 
 Use AppBuilder's `scripts/pack-deb.sh` path for this project. The generic
 **Build DEB Package** workflow targets SCons projects and its packer produces
-a different package layout. AppStore publication is a separate step that
-requires Store listing metadata, a declared license, and first-release review.
+a different package layout. The root `app-builder.json` supplies listing metadata to `czdev publish`.
+First releases require a video of the app running on the device and maintainer review.
