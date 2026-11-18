@@ -2,6 +2,7 @@
 """Privileged, targeted auditing on a dedicated USB Wi-Fi PHY."""
 
 import fcntl
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import os
 import re
@@ -25,6 +26,10 @@ class RadioError(Exception):
     pass
 
 
+class MonitorStartupError(RadioError):
+    pass
+
+
 def command(*args, check=True):
     return subprocess.run(args, capture_output=True, text=True, timeout=7, check=check)
 
@@ -33,7 +38,7 @@ def valid_mac(value):
     return MAC.fullmatch(value) and not (int(value[:2], 16) & 1) and int(value.replace(":", ""), 16)
 
 
-def dedicated_phy(interface):
+def usb_phy(interface):
     net = Path("/sys/class/net")
     device = net / interface / "device"
     phy = net / interface / "phy80211"
@@ -41,7 +46,12 @@ def dedicated_phy(interface):
         raise RadioError("Capture adapter not found")
     if not any((parent / "subsystem").resolve().name == "usb" for parent in device.resolve().parents):
         raise RadioError("Use a dedicated USB Wi-Fi adapter")
-    phy = phy.resolve()
+    return phy.resolve()
+
+
+def dedicated_phy(interface):
+    net = Path("/sys/class/net")
+    phy = usb_phy(interface)
     active_links = []
     for link in net.iterdir():
         if (link / "phy80211").resolve() != phy:
@@ -176,7 +186,8 @@ def run_session(monitor, bssid, mode):
             stations_socket.close()
 
 
-def collect(interface, freq, bssid, mode):
+@contextmanager
+def monitor_interface(interface):
     phy, active_links = dedicated_phy(interface)
     monitor = f"zgmon{os.getpid()}"
     created = False
@@ -187,25 +198,88 @@ def collect(interface, freq, bssid, mode):
             restore_links.append(link)
         command(IW, "phy", phy, "interface", "add", monitor, "type", "monitor")
         created = True
-        command(IP, "link", "set", "dev", monitor, "up")
-        command(IW, "dev", monitor, "set", "freq", freq)
-        run_session(monitor, bssid, mode)
+        try:
+            command(IP, "link", "set", "dev", monitor, "up")
+        except subprocess.CalledProcessError as error:
+            raise MonitorStartupError("USB monitor startup failed. Reconnect the adapter and retry.") from error
+        yield monitor
     finally:
         try:
             if created:
                 command(IW, "dev", monitor, "del")
         finally:
             for link in restore_links:
-                command(IP, "link", "set", "dev", link, "up")
+                command(IP, "link", "set", "dev", link, "up", check=False)
+
+
+def reset_realtek(interface):
+    usb_phy(interface)
+    device = (Path("/sys/class/net") / interface / "device").resolve()
+    usb = device.parent
+    if ((device / "driver").resolve().name != "rtw88_8821cu"
+            or (usb / "idVendor").read_text().strip() != "0bda"
+            or (usb / "idProduct").read_text().strip() != "c811"):
+        return False
+    bus, address = (int((usb / name).read_text()) for name in ("busnum", "devnum"))
+    # USBDEVFS_RESET resets this USB device, without changing its driver or firmware.
+    with open(f"/dev/bus/usb/{bus:03}/{address:03}", "wb", buffering=0) as handle:
+        fcntl.ioctl(handle, 0x5514)
+    for _ in range(20):
+        time.sleep(0.25)
+        if (Path("/sys/class/net") / interface / "phy80211").exists():
+            return True
+    return False
+
+
+@contextmanager
+def ready_monitor(interface):
+    with ExitStack() as stack:
+        try:
+            monitor = stack.enter_context(monitor_interface(interface))
+        except MonitorStartupError as error:
+            try:
+                recovered = reset_realtek(interface)
+            except (OSError, RadioError):
+                recovered = False
+            if not recovered:
+                raise error
+            monitor = stack.enter_context(monitor_interface(interface))
+        yield monitor
+
+
+def lock_radio(lock, name):
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise RadioError(f"Another {name} is running") from error
+
+
+def tuned_session(monitor, freq, bssid, mode):
+    try:
+        command(IW, "dev", monitor, "set", "freq", freq)
+    except subprocess.CalledProcessError as error:
+        raise RadioError(f"Could not tune USB adapter to {freq} MHz") from error
+    run_session(monitor, bssid, mode)
 
 def main(args):
-    if os.geteuid() != 0 or len(args) != 4:
+    if os.geteuid() != 0 or len(args) not in (2, 4, 5):
         raise RadioError("Capture helper requires approved sudo access")
-    interface, freq, bssid, mode = args
-    if mode not in ("passive", "active", "deauth"):
-        raise RadioError("Invalid radio mode")
+    interface = args[0]
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}", interface):
         raise RadioError("Invalid adapter name")
+    if len(args) == 2:
+        if args[1] != "hold":
+            raise RadioError("Invalid radio mode")
+        with open("/run/zerogotchi-radio.lock", "a", encoding="ascii") as lock:
+            lock_radio(lock, "radio session")
+            with ready_monitor(interface) as monitor:
+                print(monitor, flush=True)
+                while sys.stdin.buffer.read(64):
+                    pass
+        return
+    _, freq, bssid, mode, *leased = args
+    if mode not in ("passive", "active", "deauth"):
+        raise RadioError("Invalid radio mode")
     if not re.fullmatch(r"[0-9]{4}", freq) or not 2412 <= int(freq) <= 7115:
         raise RadioError("Unsupported Wi-Fi frequency")
     if not valid_mac(bssid):
@@ -213,12 +287,20 @@ def main(args):
     if mode != "passive" and int(freq) >= 5925:
         raise RadioError("Deauth is unavailable on 6 GHz")
 
-    with open("/run/zerogotchi-radio.lock", "a", encoding="ascii") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise RadioError("Another capture is running") from error
-        collect(interface, freq, bssid, mode)
+    if leased:
+        monitor = leased[0]
+        if not re.fullmatch(r"zgmon[0-9]{1,10}", monitor) or (
+            Path("/sys/class/net") / monitor / "phy80211"
+        ).resolve() != usb_phy(interface) or "type monitor" not in command(IW, "dev", monitor, "info").stdout:
+            raise RadioError("Auto monitor interface is unavailable")
+        with open("/run/zerogotchi-target.lock", "a", encoding="ascii") as lock:
+            lock_radio(lock, "capture")
+            tuned_session(monitor, freq, bssid, mode)
+    else:
+        with open("/run/zerogotchi-radio.lock", "a", encoding="ascii") as lock:
+            lock_radio(lock, "radio session")
+            with ready_monitor(interface) as monitor:
+                tuned_session(monitor, freq, bssid, mode)
 
 
 def interrupted(signum, frame):

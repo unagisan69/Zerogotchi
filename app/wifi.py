@@ -1,10 +1,12 @@
 """Wi-Fi discovery, capture storage, and OnlineHashCrack submission."""
 
 import csv
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import re
+import select
 import subprocess
 import tempfile
 import time
@@ -26,6 +28,10 @@ class WifiError(Exception):
 
 
 class AuthenticationError(WifiError):
+    pass
+
+
+class EmptyCapture(WifiError):
     pass
 
 
@@ -165,7 +171,62 @@ def capture_hashfile(pcap):
     return modern if modern.exists() else pcap.with_suffix(".22000")
 
 
-def capture(network, interface, mode, password, cancel, report, *, time_limit=None, radio_report=None):
+def radio_error(detail):
+    match = re.search(r"ZEROGOTCHI: ([^\r\n]+)", detail)
+    if match:
+        return WifiError(match[1])
+    if "ZEROGOTCHI_SUDO:" in detail:
+        return AuthenticationError("User password authentication failed")
+    return WifiError("Radio session failed. Check adapter and permissions")
+
+
+@contextmanager
+def auto_monitor(interface, password, cancel):
+    args = ["sudo", "-Sk", "-p", "ZEROGOTCHI_SUDO:", "--", HELPER, interface, "hold"]
+    with tempfile.TemporaryFile() as errors, subprocess.Popen(
+        args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+    ) as process:
+        try:
+            process.stdin.write(password.encode() + b"\n")
+            process.stdin.flush()
+            deadline = time.monotonic() + 15
+            while not cancel.is_set() and time.monotonic() < deadline:
+                if os.pread(errors.fileno(), 4096, 0).count(b"ZEROGOTCHI_SUDO:") > 1:
+                    break
+                if select.select([process.stdout], [], [], 0.2)[0]:
+                    monitor = process.stdout.readline().decode(errors="replace").strip()
+                    if re.fullmatch(r"zgmon[0-9]{1,10}", monitor):
+                        yield monitor
+                        return
+                    break
+        finally:
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
+        process.wait()
+        if not cancel.is_set():
+            errors.seek(0)
+            raise radio_error(errors.read(4096).decode(errors="replace"))
+        yield None
+
+
+def supported_channels(interface):
+    phy = (Path("/sys/class/net") / interface / "phy80211").resolve()
+    try:
+        output = subprocess.check_output(["/usr/sbin/iw", "phy", phy.name, "info"], text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise WifiError("USB WiFi adapter unavailable") from error
+    channels = {}
+    for freq, flags in re.findall(r"^\s*\* (\d+)(?:\.0+)? MHz \[[0-9]+\](.*)$", output, re.MULTILINE):
+        if "(disabled)" not in flags:
+            channels[int(freq)] = not any(flag in flags.lower() for flag in ("no ir", "radar"))
+    if not channels:
+        raise WifiError("USB adapter has no usable channels")
+    return channels
+
+
+def capture(network, interface, mode, password, cancel, report, *, time_limit=None, radio_report=None, monitor=None):
     if not interface:
         raise WifiError("Set capture adapter in Settings")
     if interface == "wlan0":
@@ -181,6 +242,8 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
     prompt = b"ZEROGOTCHI_SUDO:"
     args = ["sudo", "-Sk", "-p", prompt.decode(), "--", HELPER,
             interface, str(network.frequency), network.bssid, mode]
+    if monitor:
+        args.append(monitor)
     hashes = []
     try:
         with (
@@ -252,18 +315,15 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
             end = os.fstat(errors.fileno()).st_size
             detail = os.pread(errors.fileno(), 8192, max(0, end - 8192)).decode(errors="replace")
         if status:
-            error = next((line.removeprefix("ZEROGOTCHI: ").strip()
-                          for line in detail.splitlines() if "ZEROGOTCHI: " in line), "")
-            if prompt.decode() in detail and not error:
-                raise AuthenticationError("User password authentication failed")
+            error = radio_error(detail)
             if pcap and pcap.stat().st_size > 24:
                 (folder / "network.json").write_text(json.dumps({"ssid": network.ssid}), encoding="utf-8")
-                error = (error or "Capture interrupted") + ". PCAP saved."
-            raise WifiError(error or "Radio session failed")
+                raise WifiError(f"{error} PCAP saved.")
+            raise error
         if not pcap:
             return None, None, ""
         if pcap.stat().st_size <= 24:
-            raise WifiError("Stopped. No packets were captured.")
+            raise EmptyCapture("Stopped. No packets were captured.")
         (folder / "network.json").write_text(json.dumps({"ssid": network.ssid}), encoding="utf-8")
         if not hashes:
             with tempfile.TemporaryDirectory() as scratch:
@@ -286,8 +346,10 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
 
 def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25):
     nearby = scan()
+    channels = supported_channels(interface)
     targets = [network for network in nearby if network.ssid
-               and "WPA" in network.security and "802.1X" not in network.security]
+               and {"WPA", "WPA1", "WPA2"}.intersection(network.security.split())
+               and "802.1X" not in network.security and network.frequency in channels]
     skipped = len(nearby) - len(targets)
     attempted = found = failed = 0
     uploaded = upload_failed = 0
@@ -314,26 +376,43 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
                 upload_failed += int(bool(rejected))
             queue.pop(0)
 
-    for network in targets:
-        if cancel.is_set():
-            break
-        attempted += 1
-        report(status("Tuning", network.ssid))
-        mode = "active" if network.frequency < 5925 else "passive"
-        try:
-            _, hashes, _ = capture(network, interface, mode, password, cancel,
-                                   lambda message: None, time_limit=target_seconds,
+    if targets and not cancel.is_set():
+        report(status("Preparing"))
+        with auto_monitor(interface, password, cancel) as monitor:
+            for network in targets:
+                if cancel.is_set():
+                    break
+                attempted += 1
+                report(status("Tuning", network.ssid))
+                mode = "active" if channels[network.frequency] and network.frequency < 5925 else "passive"
+
+                def run_target(mode, seconds):
+                    return capture(network, interface, mode, password, cancel, lambda message: None,
+                                   time_limit=seconds, monitor=monitor,
                                    radio_report=lambda phase, count: report(status(phase, network.ssid, count)))
-        except AuthenticationError:
-            raise
-        except WifiError:
-            if not cancel.is_set():
-                failed += 1
-        else:
-            found += int(hashes is not None)
-            if hashes and auto_upload:
-                queue.append(hashes)
-        send_pending("Uploading")
+
+                try:
+                    try:
+                        _, hashes, _ = run_target(mode, target_seconds)
+                    except EmptyCapture:
+                        if cancel.is_set():
+                            break
+                        report(status("Retrying", network.ssid))
+                        _, hashes, _ = run_target("passive", min(8, target_seconds))
+                except AuthenticationError:
+                    raise
+                except EmptyCapture:
+                    if not cancel.is_set():
+                        skipped += 1
+                except WifiError as error:
+                    if not cancel.is_set():
+                        failed += 1
+                        report(status("Skipping", str(error)))
+                else:
+                    found += int(hashes is not None)
+                    if hashes and auto_upload:
+                        queue.append(hashes)
+                send_pending("Uploading")
     del password
     while queue and not cancel.is_set():
         report(status("Idling"))

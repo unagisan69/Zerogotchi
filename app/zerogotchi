@@ -98,19 +98,17 @@ class Display:
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
         resting = status.phase == "Idling"
         phase = status.phase
-        face, mood = {
-            "Idling": ("#96aeea", "sleep"),
-            "Deauthing": ("#ff9c73", "focus"),
-            "Checking": ("#d5a7ff", "squint"),
-            "Saving": ("#fff18e", "happy"),
-            "Uploading": ("#9cdcff", "focus"),
-        }.get(phase, (TEAL, "alert"))
+        face = TEAL
+        mood = {"Idling": "sleep", "Deauthing": "focus", "Checking": "squint",
+                "Saving": "happy", "Uploading": "focus"}.get(phase, "alert")
         tilt = -3 if blink and not resting else 0
         draw.line((59, 44, 67, 33 + tilt, 75, 33 + tilt), fill=face, width=3)
         draw.ellipse((73, 29 + tilt, 81, 37 + tilt), fill=face)
         draw.rounded_rectangle((25, 44, 94, 92), radius=9, outline=face, width=3)
         for x in (40, 72):
-            if mood in ("sleep", "squint") or blink:
+            if mood == "squint" and not blink:
+                draw.line((x, 61, x + 6, 64, x, 67), fill=face, width=2)
+            elif mood == "sleep" or blink:
                 draw.line((x, 64, x + 7, 64), fill=face, width=2)
             elif mood == "focus":
                 draw.line((x, 59, x + 7, 64), fill=face, width=3)

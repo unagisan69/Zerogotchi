@@ -15,7 +15,7 @@ sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
 git clone https://github.com/unagisan69/Zerogotchi.git
 cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.1_all.deb
+sudo apt install ./build/zerogotchi_0.4.2_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -32,8 +32,14 @@ The exclusions apply to both Attack and Auto.
 Use **Auto** only where you own all the networks it can target. It scans once
 and visits each eligible BSSID in signal order, using Active Capture for up
 to 25 seconds per target or until it finds a usable handshake or PMKID.
-Auto skips hidden, open, and enterprise networks, and uses passive capture
-on 6 GHz. It asks for authorization and your Cardputer password before
+Auto skips hidden, open, enterprise, WPA3-only, and unsupported-channel
+networks. It leaves the USB adapter in monitor mode for the sweep and uses
+passive capture on supported channels marked DFS or no-IR, or on 6 GHz.
+If an access point yields no packets, Auto gives it one short passive retry.
+If monitor startup fails on the Realtek RTL8821CU USB device `0bda:c811`,
+Zerogotchi resets that USB device once and retries. If startup still fails,
+reconnect the capture adapter and restart Auto.
+It asks for authorization and your Cardputer password before
 starting. With an OnlineHashCrack key configured, it also asks you to accept
 the service terms up front, then automatically submits new hash files and
 retries temporary connection failures while idling. Auto always saves results
