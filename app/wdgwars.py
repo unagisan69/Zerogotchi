@@ -1,12 +1,14 @@
-"""WDG Wars API-key check and WiGLE CSV upload."""
+"""WDG Wars account checks and signed survey upload."""
 
+import base64
 import csv
+import hashlib
+import hmac
 from itertools import islice
 import json
-from pathlib import Path
 import re
+import secrets
 import subprocess
-import tempfile
 
 import wifi
 import wigle
@@ -21,19 +23,26 @@ def credentials():
     return key if KEY.fullmatch(key) else None
 
 
-def request(path, survey=None):
+def request(path, *, networks=None):
     key = credentials()
     if not key:
         raise wifi.WifiError("Save your WDG Wars API key first")
-    args = ["curl", "--disable", "--silent", "--show-error", "--max-time", "115" if survey else "15",
+    args = ["curl", "--disable", "--silent", "--show-error", "--max-time", "115" if networks is not None else "15",
             "--proto", "=https", "--header", "Accept: application/json",
             "--config", "-", "--write-out", "\n%{http_code}"]
-    if survey:
-        filename = str(survey).replace("\\", "\\\\").replace('"', '\\"')
-        args += ["--form", f'file=@"{filename}";type=text/csv']
+    config = f'header = "X-API-Key: {key}"\n'
+    if networks is not None:
+        # The official client signs the nonce followed by the base64 JSON.
+        raw = json.dumps({"networks": networks}, separators=(",", ":")).encode("utf-8")
+        data = base64.b64encode(raw).decode("ascii")
+        nonce = secrets.token_hex(8)
+        signature = hmac.new(key.encode("ascii"), (nonce + data).encode("ascii"), hashlib.sha256).hexdigest()
+        payload = json.dumps({"data": data, "nonce": nonce, "sig": signature}, separators=(",", ":"))
+        config += 'header = "Content-Type: application/json"\n'
+        config += 'data-binary = ' + json.dumps(payload) + "\n"
     try:
         response = subprocess.run([*args, BASE_URL + path], text=True, capture_output=True,
-                                  input=f'header = "X-API-Key: {key}"\n', timeout=120 if survey else 17)
+                                  input=config, timeout=120 if networks is not None else 17)
     except (OSError, subprocess.SubprocessError) as error:
         raise wifi.WifiError("WDG Wars connection failed") from error
     if response.returncode:
@@ -45,7 +54,7 @@ def request(path, survey=None):
         result = {}
     if not isinstance(result, dict):
         result = {}
-    if status == "409" and result.get("error") == "duplicate_upload" and survey:
+    if status == "409" and result.get("error") == "duplicate_upload" and networks is not None:
         return {}
     if status == "429":
         wait = result.get("retry_after")
@@ -63,26 +72,51 @@ def test_profile():
     return "WDG Wars API key verified."
 
 
+def network_record(row):
+    auth = row["AuthMode"].upper()
+    if row["Type"] == "BLE":
+        auth = "BLE"
+    elif "SAE" in auth or "WPA3" in auth:
+        auth = "WPA3"
+    elif "WPA2" in auth:
+        auth = "WPA2-EAP" if "EAP" in auth else "WPA2"
+    elif "WPA" in auth:
+        auth = "WPA"
+    elif "WEP" in auth:
+        auth = "WEP"
+    else:
+        auth = "OPEN"
+    return {
+        "bssid": row["MAC"], "ssid": row["SSID"], "auth": auth, "first_seen": row["FirstSeen"],
+        "channel": int(row["Channel"]), "rssi": int(row["RSSI"]),
+        "lat": float(row["CurrentLatitude"]), "lon": float(row["CurrentLongitude"]),
+        "alt": float(row["AltitudeMeters"]), "type": row["Type"],
+    }
+
+
 def upload(path):
-    imported = duplicates = rejected = 0
-    with wigle.export_survey(path) as export, tempfile.TemporaryDirectory(prefix="zg-wdgwars-") as folder:
-        with export.open(encoding="utf-8", newline="") as source:
-            reader = csv.reader(source)
-            headers = (next(reader), next(reader))
-            for part, rows in enumerate(iter(lambda: list(islice(reader, 10_000)), []), 1):
-                chunk = Path(folder) / f"{export.stem}-{part}.csv"
-                with chunk.open("w", encoding="utf-8", newline="") as output:
-                    writer = csv.writer(output)
-                    writer.writerows(headers)
-                    writer.writerows(rows)
-                result = request("/endpoint/upload-csv", chunk)
-                if not result:
-                    duplicates += len(rows)
-                else:
-                    counts = [result.get(name, 0) for name in ("imported", "duplicates", "bad_rows", "no_gps")]
-                    if any(type(count) is not int or count < 0 for count in counts):
-                        raise wifi.WifiError("WDG Wars accepted the upload but returned invalid counts")
-                    imported += counts[0]
-                    duplicates += counts[1]
-                    rejected += counts[2] + counts[3]
-    return f"Imported {imported}. Duplicates {duplicates}. Rejected {rejected}."
+    imported = duplicates = rejected = submitted = 0
+    with wigle.export_survey(path) as export, export.open(encoding="utf-8", newline="") as source:
+        next(source)
+        rows = csv.DictReader(source)
+        for batch in iter(lambda: list(islice(rows, 1_000)), []):
+            try:
+                records = [network_record(row) for row in batch]
+            except (TypeError, ValueError) as error:
+                raise wifi.WifiError("A survey row has invalid radio or GPS data") from error
+            result = request("/api/upload/", networks=records)
+            submitted += len(records)
+            if not result:
+                duplicates += len(records)
+                continue
+            counts = [result.get(name, 0) for name in ("imported", "duplicates", "bad_rows", "no_gps")]
+            if any(type(count) is not int or count < 0 for count in counts):
+                raise wifi.WifiError("WDG Wars returned invalid upload counts")
+            imported += counts[0]
+            duplicates += counts[1]
+            rejected += counts[2] + counts[3]
+    message = f"Imported {imported}. Duplicates {duplicates}. Rejected {rejected}."
+    unreported = submitted - imported - duplicates - rejected
+    if unreported > 0:
+        message += f" No result for {unreported}."
+    return message

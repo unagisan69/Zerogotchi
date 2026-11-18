@@ -241,8 +241,9 @@ class Display:
         self.paint(image)
 
     def draw_wardrive_stats(self, draw, status, location, satellites):
-        draw.text((124, 32), "Wardriving", font=self.small, fill=MUTED)
-        draw.text((124, 49), f"{status.networks} Wi-Fi  •  {status.bluetooth} BLE  •  {status.scans} scans",
+        draw.text((124, 32), f"{status.detected} Wi-Fi seen  •  {status.scans} scans",
+                  font=self.small, fill=MUTED)
+        draw.text((124, 49), f"New: {status.networks} Wi-Fi  •  {status.bluetooth} BLE",
                   font=self.body, fill=WHITE)
         count = "—" if satellites is None else str(satellites)
         draw.text((124, 67), f"Satellites in view: {count}", font=self.body, fill=WHITE)
@@ -697,16 +698,30 @@ class App:
                     options, back=back)
 
     def survey_options(self, path, back, done):
-        providers = (("WiGLE", wigle), ("WDG Wars", wdgwars))
-        return tuple((f"Upload to {name}", lambda name=name, provider=provider:
-                      self.confirm_survey(name, provider, path, back, done))
-                     for name, provider in providers if provider.credentials())
+        providers = tuple((name, provider) for name, provider in (("WiGLE", wigle), ("WDG Wars", wdgwars))
+                          if provider.credentials())
+        options = tuple((f"Upload to {name}", lambda name=name, provider=provider:
+                         self.confirm_survey(name, ((name, provider),), path, back, done))
+                        for name, provider in providers)
+        if len(providers) == 2:
+            options += (("Upload to both", lambda: self.confirm_survey(
+                "both services", providers, path, back, done)),)
+        return options
 
-    def confirm_survey(self, name, provider, path, back, done):
-        self.screen(f"Upload to {name}?",
+    def confirm_survey(self, destination, providers, path, back, done):
+        def upload():
+            messages = []
+            for name, provider in providers:
+                try:
+                    result = provider.upload(path)
+                except (wifi.WifiError, OSError) as error:
+                    result = str(error)
+                messages.append(f"{name}: {result}" if len(providers) > 1 else result)
+            return "\n".join(messages)
+
+        self.screen(f"Upload to {destination}?",
                     "Send filtered Wi-Fi and BLE addresses, names, signal levels, and GPS locations?",
-                    (("Cancel", back),
-                     ("Upload", lambda: self.provider_request(name, lambda: provider.upload(path), done))),
+                    (("Cancel", back), ("Upload", lambda: self.provider_request("Survey upload", upload, done))),
                     back)
 
     def wigle_request(self, action, back=None):

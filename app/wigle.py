@@ -1,5 +1,6 @@
 """Local WiGLE surveys and account API, independent of WPA captures."""
 
+from concurrent.futures import ThreadPoolExecutor
 import csv
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 import uuid
 
@@ -234,6 +236,7 @@ class WardriveStatus:
     error: str = ""
     survey: Path | None = None
     bluetooth: int = 0
+    detected: int = 0
 
 
 def seed_seen(connection):
@@ -279,7 +282,7 @@ def wardrive(interface, position, cancel, report, *, interval=12, pause=None):
         Path("/sys/class/net") / interface / "phy80211"
     ).exists():
         raise wifi.WifiError(f"WiFi adapter {interface} is unavailable")
-    scans = networks_logged = bluetooth_logged = 0
+    scans = detected = networks_logged = bluetooth_logged = 0
     survey = None
     configured = survey_privacy.zones()
     allowed = wifi.allowlist()
@@ -290,7 +293,7 @@ def wardrive(interface, position, cancel, report, *, interval=12, pause=None):
 
     def status(phase, error=""):
         return WardriveStatus(phase, scans, networks_logged, networks_logged + bluetooth_logged,
-                              error, survey, bluetooth_logged)
+                              error, survey, bluetooth_logged, detected)
 
     def interrupted():
         return cancel.is_set() or (pause is not None and pause.is_set())
@@ -299,44 +302,56 @@ def wardrive(interface, position, cancel, report, *, interval=12, pause=None):
         fix = position()
         return fix if fix is not None and not survey_privacy.private(fix, configured) else None
 
-    while wifi.wait_while_paused(cancel, pause, lambda: report(status("Paused"))):
-        if configured and public_fix() is None:
-            report(status("Private" if position() else "Locating"))
-            wifi.wait_until_pause_or_cancel(cancel, pause, min(2, interval))
-            continue
-        report(status("Scanning"))
-        rows = []
-        error = ""
-        scanned = 0
+    def scan_wifi():
         try:
             networks = wifi.scan(interface=interface, allowed=allowed)
-            scanned = 1
-            if not interrupted() and public_fix() is not None:
-                signals = rssi_by_bssid(interface)
-                fix = public_fix()
-                if fix is not None:
-                    rows.extend(survey_rows(networks, signals, fix, datetime.now(timezone.utc)))
-        except wifi.WifiError as failure:
-            error = str(failure)
-
+        except wifi.WifiError:
+            return None, [], "Wi-Fi scan failed"
         if not interrupted() and public_fix() is not None:
-            report(status("Listening", error))
-            devices, bluetooth_error = ble.scan(lambda: interrupted() or public_fix() is None)
+            try:
+                signals = rssi_by_bssid(interface)
+            except wifi.WifiError:
+                return len(networks), [], "Wi-Fi RSSI unavailable"
             fix = public_fix()
             if fix is not None:
-                rows.extend(bluetooth_rows(devices, fix, datetime.now(timezone.utc)))
-            error = error or bluetooth_error
-        if interrupted() or (configured and public_fix() is None):
-            continue
+                rows = survey_rows(networks, signals, fix, datetime.now(timezone.utc))
+                return len(networks), rows, ""
+        return len(networks), [], ""
 
-        with lifetime.database(wifi.DATA) as connection:
-            survey, added_wifi, added_bluetooth = append_new(
-                connection, survey, rows, datetime.now(timezone.utc))
-            lifetime.increment(connection, "wardriving", scans=scanned, networks=added_wifi,
-                               bluetooth=added_bluetooth)
-        scans += scanned
-        networks_logged += added_wifi
-        bluetooth_logged += added_bluetooth
-        report(status("Listening" if position() else "Locating", error))
-        wifi.wait_until_pause_or_cancel(cancel, pause, interval)
+    def scan_bluetooth():
+        if public_fix() is None:
+            return [], ""
+        devices, error = ble.scan(lambda: interrupted() or public_fix() is None, seconds=8)
+        fix = public_fix()
+        rows = bluetooth_rows(devices, fix, datetime.now(timezone.utc)) if fix else []
+        return rows, error
+
+    with ThreadPoolExecutor(max_workers=2) as radios:
+        while wifi.wait_while_paused(cancel, pause, lambda: report(status("Paused"))):
+            if configured and public_fix() is None:
+                report(status("Private" if position() else "Locating"))
+                wifi.wait_until_pause_or_cancel(cancel, pause, min(2, interval))
+                continue
+            started = time.monotonic()
+            report(status("Scanning"))
+            wifi_job = radios.submit(scan_wifi)
+            bluetooth_job = radios.submit(scan_bluetooth)
+            wifi_count, wifi_rows, wifi_error = wifi_job.result()
+            ble_rows, bluetooth_error = bluetooth_job.result()
+            if interrupted() or (configured and public_fix() is None):
+                continue
+            scanned = int(wifi_count is not None)
+            if scanned:
+                detected = wifi_count
+            with lifetime.database(wifi.DATA) as connection:
+                survey, added_wifi, added_bluetooth = append_new(
+                    connection, survey, wifi_rows + ble_rows, datetime.now(timezone.utc))
+                lifetime.increment(connection, "wardriving", scans=scanned, networks=added_wifi,
+                                   bluetooth=added_bluetooth)
+            scans += scanned
+            networks_logged += added_wifi
+            bluetooth_logged += added_bluetooth
+            report(status("Listening" if position() else "Locating", wifi_error or bluetooth_error))
+            remaining = interval - (time.monotonic() - started)
+            wifi.wait_until_pause_or_cancel(cancel, pause, max(0, remaining))
     return status("Stopped")

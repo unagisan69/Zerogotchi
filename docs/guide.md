@@ -74,14 +74,16 @@ OnlineHashCrack tasks stay available.
 
 1. Select **Wardriving → Start** and enter your Cardputer user password to
    power GPS.
-2. Watch completed scans, new Wi-Fi and Bluetooth LE addresses, satellites in
-   view, and your latest latitude and longitude. A stale position is labeled **Last GPS fix**.
+2. Watch Wi-Fi detections from the latest scan, new Wi-Fi and Bluetooth LE
+   addresses saved this session, satellites in view, and your latest latitude
+   and longitude. Previously logged BSSIDs still count as seen. A stale position is labeled **Last GPS fix**.
 3. Press **Esc** to stop. With a saved survey, the summary offers each upload
    service that has credentials configured, along with **Exit to main menu**.
+   With both accounts configured, **Upload to both** submits to each service.
    Find local reports later under **Wardriving → Saved surveys**.
 
 Wardriving scans Wi-Fi through NetworkManager and Bluetooth LE through the
-built-in Bluetooth controller. With a fresh GPS fix, it saves each new BSSID
+built-in Bluetooth controller concurrently. With a fresh GPS fix, it saves each new BSSID
 or BLE address with measured signal strength and coordinates in a local WiGLE
 CSV. The address index survives app restarts and also imports addresses from
 existing local surveys. BLE devices that rotate addresses may appear more than
@@ -163,7 +165,8 @@ endpoint. The app stores the key in an owner-only settings file.
 Choose a destination when Wardriving ends or select a file under **Saved surveys**.
 Confirm to send the filtered Wi-Fi and BLE addresses, names, signal levels,
 and GPS coordinates.
-WDG Wars uses its CSV upload endpoint. Survey accuracy is estimated from the
+WDG Wars uses its signed telemetry API for Wi-Fi and BLE. The upload screen
+shows separate results when sending to both services. Survey accuracy is estimated from the
 receiver’s HDOP. WPA hash submissions use the separate OnlineHashCrack flow.
 
 ## Local files

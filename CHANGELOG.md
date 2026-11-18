@@ -10,6 +10,12 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.15](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.15)
+
+- Scan Wi-Fi and Bluetooth LE concurrently and show Wi-Fi detections separately from newly logged addresses.
+- Use WDG Wars’ signed upload API for Wi-Fi and BLE and show any rows without an import result.
+- Offer **Upload to both** when WiGLE and WDG Wars credentials are saved, with an outcome for each service.
+
 ## [0.4.14](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.14)
 
 - Added an SSID allow list for Auto WiFi Attack and Wardriving.
