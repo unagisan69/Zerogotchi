@@ -11,11 +11,11 @@ and install the Debian package:
 ```sh
 sudo apt update
 sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
-  network-manager sudo iw iproute2 tcpdump aircrack-ng hcxtools ca-certificates
+  network-manager sudo iw iproute2 tcpdump aircrack-ng hcxtools curl ca-certificates
 git clone https://github.com/unagisan69/Zerogotchi.git
 cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.3_all.deb
+sudo apt install ./build/zerogotchi_0.4.4_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -48,11 +48,28 @@ locally for review in **Saved captures**. It idles with the sweep totals until
 you press **Esc**. During a sweep, **Esc** stops after the current capture is
 closed and saved.
 
-The dashboard shows the current radio phase, successful deauth bursts on
-the current target, and a combined count of usable handshakes and PMKIDs.
-It shows **GPS: on** after receiving valid NMEA from the GNSS HAT at 115200
-baud, even before the receiver has a position fix. Auto uses the stock external
-5 V rail and restores it when you leave if it powered the rail on.
+The dashboard shows the current radio phase, completed deauth bursts across
+the session, and a combined count of usable handshakes and PMKIDs. Its satellite
+icon lights when the HAT sends valid NMEA at 115200 baud. The globe indicates
+whether NetworkManager's internet check passes, and the battery icon shows the
+stock gauge's charge percentage. Auto restores the external 5 V rail when you
+leave if it powered the rail on.
+
+**Auto → Session log** shows the latest sweep's decisions and results. The file
+at `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/auto-session.log` is replaced
+when a new sweep starts.
+
+## WiGLE
+
+In **Settings → WiGLE**, enter the API name and token, then select **Test
+credentials** to check the account without uploading a report. With credentials
+configured, Auto records a local WiGLE CSV after a fresh GNSS position fix
+and an onboard Wi-Fi scan. The survey uses measured signal levels and estimates
+position accuracy from the receiver's HDOP. It excludes SSIDs on the blacklist.
+
+To report the survey, open **Settings → WiGLE → Saved surveys**, choose a file,
+and confirm the upload. A survey includes BSSIDs, SSIDs, signal levels, and
+observation coordinates. WPA captures and hashes are handled separately.
 
 ## Attack mode
 

