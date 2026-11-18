@@ -2,12 +2,12 @@
 
 [Back to Zerogotchi](../README.md) · [Installation](installation.md)
 
-[Auto](#auto) · [Attack](#attack) · [Saved captures](#saved-captures) ·
+[Auto WiFi Attack](#auto-wifi-attack) · [Manual WiFi Attack](#manual-wifi-attack) · [Saved captures](#saved-captures) ·
 [Wardriving](#wardriving) · [Settings](#settings-and-dashboard) ·
 [OnlineHashCrack](#onlinehashcrack) · [Private Zones](#private-zones) · [Survey uploads](#survey-uploads)
 
 Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go
-back or stop. Use Auto and Attack only on networks and clients you own or are
+back or stop. Use Auto and Manual WiFi Attack only on networks and clients you own or are
 authorized to test.
 
 Press **P** on an active Auto or Wardriving dashboard to pause, then press
@@ -16,9 +16,9 @@ retries the same target on resume if it still needs a usable result.
 Wardriving finishes an in-progress scan and discards its results if paused.
 **Esc** still ends the session while paused.
 
-## Auto
+## Auto WiFi Attack
 
-1. Select **Auto → Start sweep** and confirm the scope.
+1. Select **Auto WiFi Attack → Start sweep** and confirm the scope.
 2. With an OnlineHashCrack key configured, review the upload terms and consent.
 3. Enter your Cardputer user password. The sweep runs unattended after this.
 
@@ -29,18 +29,18 @@ DFS, no-IR, and 6 GHz channels. It gives an access point one short passive retry
 if it returns no packets.
 
 Auto skips hidden, open, enterprise, WPA3-only, and unsupported-channel
-networks, along with blacklisted SSIDs and BSSIDs with an existing usable
+networks, along with blocked SSIDs and BSSIDs with an existing usable
 handshake or PMKID. Other APs with the same SSID can still be eligible.
 
 The dashboard reports the current radio phase, visited targets, usable results,
 and completed deauth bursts across the session. It idles after the sweep.
 Press **Esc** to return. During a sweep, **Esc** closes and saves the current
-capture. **Auto → Session log** shows decisions, capture outcomes, and
+capture. **Auto WiFi Attack → Session log** shows decisions, capture outcomes, and
 upload results. Each sweep replaces the previous log.
 
-## Attack
+## Manual WiFi Attack
 
-Select **Attack**, accept the scope disclaimer, scan, and select a BSSID.
+Select **Manual WiFi Attack**, accept the scope disclaimer, scan, and select a BSSID.
 
 | Mode | Behavior |
 | --- | --- |
@@ -48,7 +48,7 @@ Select **Attack**, accept the scope disclaimer, scan, and select a BSSID.
 | **Deauth Attack** | Discovers clients on the selected AP and sends directed bursts until you press **Esc**. |
 | **Active Capture** | Captures while directing deauth bursts at observed clients on the selected AP. |
 
-The themed Attack dashboard shows the target, radio phase, elapsed time,
+The themed Manual WiFi Attack dashboard shows the target, radio phase, elapsed time,
 capture size, client counts, deauth results, and handshake or PMKID progress.
 Capture modes stop on a usable result or **Esc**.
 Clients using Protected Management Frames may ignore injected deauth frames.
@@ -62,7 +62,7 @@ adapter connected if you use it for SSH and uploads.
 
 ## Saved captures
 
-Under **Attack → Saved captures**, entries are listed by network name.
+Under **Manual WiFi Attack → Saved captures**, entries are listed by network name.
 Zerogotchi keeps the PCAP and saves usable target-filtered hashes as
 `.hc22000`. Earlier `.22000` files are also readable.
 
@@ -81,7 +81,7 @@ OnlineHashCrack tasks stay available.
    Find local reports later under **Wardriving → Saved surveys**.
 
 Wardriving repeatedly scans with NetworkManager and respects the SSID
-blacklist. With a fresh fix, it adds observations with measured signal levels
+block list. With a fresh fix, it adds observations with measured signal levels
 to one local WiGLE CSV per session. This scanning-only mode has its own
 adapter setting and defaults to the onboard `wlan0`.
 
@@ -90,9 +90,9 @@ adapter setting and defaults to the onboard `wlan0`.
 | Setting | Purpose |
 | --- | --- |
 | **Theme** | Choose the default Acidburn portraits, the animated Computer face, or Zero Cool. The setting applies to Auto and Wardriving. |
-| **WiFi Adapter** | Set the radio for Auto and Attack. |
+| **WiFi Adapter** | Set the radio for Auto and Manual WiFi Attack. |
 | **Wardriving Adapter** | Choose the Wardriving interface independently. |
-| **SSID blacklist** | Enter case-sensitive, comma-separated SSIDs. Quote a name that contains commas. With a blacklist enabled, hidden SSIDs are excluded when their names cannot be checked. |
+| **SSID block list** | Enter case-sensitive, comma-separated SSIDs. Quote a name that contains commas. With a block list enabled, hidden SSIDs are excluded when their names cannot be checked. |
 | **Private Zones** | Add GPS circles where survey recording pauses. |
 | **OnlineHashCrack API key** | Save a masked key for WPA hash submissions. |
 | **WiGLE** | Save and test the WiGLE API name and token, and manage survey uploads. |
@@ -107,7 +107,7 @@ leave the mode.
 ## OnlineHashCrack
 
 After setting a key, choose **Submit WPA hashes** in a saved capture or
-respond to the prompt when Attack saves a usable result. Accept the
+respond to the prompt when Manual WiFi Attack saves a usable result. Accept the
 [service terms](https://www.onlinehashcrack.com/terms-conditions.php) before
 sending. With upfront consent, Auto submits new results during its sweep
 and retries temporary connection failures while idling.
@@ -128,7 +128,7 @@ It displays **Private** and pauses scans when a circle overlaps the estimated
 GPS accuracy area. It resumes after a fresh fix places you outside the zones.
 Auto applies the circles to its location-tagged survey snapshots.
 
-Both upload services recheck the current zones and the existing SSID blacklist
+Both upload services recheck the current zones and the existing SSID block list
 before sending a saved survey. This filters matching rows out of the upload
 copy while keeping the original local CSV. GPS and radio measurements are
 estimates. Allow extra radius at the edge of an area you want to protect.

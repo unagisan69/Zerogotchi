@@ -31,6 +31,6 @@ configure udev permissions and module blocklists. Use a separate supported
 USB adapter if you want to keep your Zerogotchi capture adapter on its stock
 kernel driver, or follow wifit3's uninstall procedure before switching it
 back. Companion sessions keep their own captures and do not read the
-Zerogotchi blacklist or upload settings. Check the
+Zerogotchi block list or upload settings. Check the
 [upstream hardware matrix](https://github.com/derv82/wifit3/blob/master/docs/SUPPORTED-HARDWARE.md)
 for per-chipset support.

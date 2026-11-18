@@ -43,18 +43,18 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 
 | Feature | What it does |
 | --- | --- |
-| **[Auto](docs/guide.md#auto)** | Visits eligible access points once, runs capture and directed deauth where the radio and channel allow it, then idles. Skips blacklisted SSIDs and BSSIDs with saved results. Shows a session-wide deauth count and logs why targets were skipped. |
-| **[Attack](docs/guide.md#attack)** | Select an access point for Active Capture, Passive Capture, or Deauth Attack. Follow target and radio activity on the themed dashboard. Capture stops on a usable handshake or PMKID. |
+| **[Auto WiFi Attack](docs/guide.md#auto-wifi-attack)** | Visits eligible access points once, runs capture and directed deauth where the radio and channel allow it, then idles. Skips blocked SSIDs and BSSIDs with saved results. Shows a session-wide deauth count and logs why targets were skipped. |
+| **[Manual WiFi Attack](docs/guide.md#manual-wifi-attack)** | Select an access point for Active Capture, Passive Capture, or Deauth Attack. Follow target and radio activity on the themed dashboard. Capture stops on a usable handshake or PMKID. |
 | **[Saved captures](docs/guide.md#saved-captures)** | Review captures by network name. Keeps PCAPs and target-filtered Hashcat mode 22000 files. Includes a confirmed **Clear all handshakes** action. |
 | **[Wardriving](docs/guide.md#wardriving)** | Scans with a separately configurable adapter and shows unique networks, scan counts, GPS observation counts, and the latest fix. Saves a local WiGLE CSV when GPS has a fix. |
 | **[OnlineHashCrack](docs/guide.md#onlinehashcrack)** | Submit WPA hashes from Saved captures, or let Auto send new results after upfront consent. Auto retries temporary connection failures. |
 | **[Survey uploads](docs/guide.md#survey-uploads)** | Send GPS-tagged surveys to WiGLE or WDG Wars after Wardriving, or pick a saved survey later. |
-| **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving in GPS circles and filter observations against those zones and the SSID blacklist before sending. |
-| **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto, Wardriving, and Attack. Dashboard indicators use the Cardputer’s live status. |
+| **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving in GPS circles and filter observations against those zones and the SSID block list before sending. |
+| **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto WiFi Attack, Manual WiFi Attack, and Wardriving. Dashboard indicators use the Cardputer’s live status. |
 | **[In-app updates](docs/installation.md#install-or-upgrade)** | Check GitHub for a newer release and install its verified Debian package from the main menu. |
 
 The **built-in Wi-Fi adapter** supports scanning and Wardriving on the stock driver. **Capture and deauth** require a USB adapter that supports monitor mode and, for deauth, injection. **GPS-tagged surveys** require a GNSS HAT with a position fix.
 
-Use Auto and Attack only on networks and equipment you own or are authorized to test. The optional [wifit3 companion](docs/companion.md) provides additional lab methods, including active PMKID association, WPS recovery, WEP, and experimental WPA3 downgrade.
+Use Auto and Manual WiFi Attack only on networks and equipment you own or are authorized to test. The optional [wifit3 companion](docs/companion.md) provides additional lab methods, including active PMKID association, WPS recovery, WEP, and experimental WPA3 downgrade.
 
 Zerogotchi and its bundled theme artwork are available under the [MIT License](LICENSE).

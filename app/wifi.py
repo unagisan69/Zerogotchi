@@ -187,7 +187,7 @@ def blacklist():
     try:
         return parse_blacklist(read_setting("ssid-blacklist"))
     except csv.Error as error:
-        raise WifiError("Fix the SSID blacklist in Settings") from error
+        raise WifiError("Fix the SSID block list in Settings") from error
 
 
 def is_ignored(network, ignored):
@@ -280,7 +280,7 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
     if interface == "wlan0":
         raise WifiError("Built-in WiFi can scan. Select a USB adapter for capture.")
     if is_ignored(network, blacklist()):
-        raise WifiError("Network is excluded by the SSID blacklist")
+        raise WifiError("Network is excluded by the SSID block list")
     bssid = network.bssid.replace(":", "").lower()
     folder = None
     if mode != "deauth":
@@ -434,7 +434,7 @@ def auto_capture(interface, password, cancel, report, *, auto_upload=False, targ
 
 def skip_reason(network, ignored, captured, channels):
     if network.ssid in ignored:
-        return "SSID blacklist"
+        return "SSID block list"
     if not network.ssid:
         return "hidden SSID"
     if network.bssid.replace(":", "").lower() in captured:

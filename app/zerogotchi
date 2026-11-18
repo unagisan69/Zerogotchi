@@ -32,6 +32,8 @@ FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 INPUT_EVENT = struct.Struct("@llHHi")
 KEY_ESC, KEY_ENTER, KEY_UP, KEY_DOWN, KEY_BACKSPACE = 1, 28, 103, 108, 14
 KEY_P = 25
+AUTO_ATTACK_TITLE = "Auto WiFi Attack"
+MANUAL_ATTACK_TITLE = "Manual WiFi Attack"
 KEYS = {
     **dict(enumerate("1234567890-=", 2)),
     **dict(enumerate("qwertyuiop[]", 16)),
@@ -332,13 +334,13 @@ class App:
 
     def home(self):
         self.screen("Zerogotchi", items=(
-            ("Auto", self.auto), ("Wardriving", self.wardriving), ("Attack", self.disclaimer),
+            (AUTO_ATTACK_TITLE, self.auto), ("Wardriving", self.wardriving), (MANUAL_ATTACK_TITLE, self.disclaimer),
             ("About", self.about),
             ("Settings", self.settings), ("Update", self.update), ("Exit", self.exit),
         ), back=self.exit)
 
     def auto(self):
-        self.screen("Auto", "Auto sends deauth frames on nearby networks. Use it only where you "
+        self.screen(AUTO_ATTACK_TITLE, "Auto sends deauth frames on nearby networks. Use it only where you "
                     "own every target. It visits each network once and then idles.",
                     (("Start sweep", self.start_auto), ("Session log", self.auto_log)), back=self.home)
 
@@ -380,7 +382,7 @@ class App:
         entries = tuple((line.rstrip()[26:], lambda line=line: self.screen(
             "Session log", line.rstrip()[26:], back=self.auto_log
         )) for line in lines)
-        self.screen("Session log", "" if entries else "No Auto session log yet.", entries, self.auto)
+        self.screen("Session log", "" if entries else "No Auto WiFi Attack session log yet.", entries, self.auto)
 
     def start_auto(self):
         adapter = wifi.read_setting("adapter")
@@ -388,12 +390,12 @@ class App:
             self.screen("WiFi adapter required", "Select a USB WiFi adapter in Settings.", back=self.auto)
             return
         if adapter == "wlan0":
-            self.screen("Built-in WiFi", "The stock driver supports scanning only. Select a USB adapter for Auto.",
+            self.screen("Built-in WiFi", "The stock driver supports scanning only. Select a USB adapter for Auto WiFi Attack.",
                         back=self.auto)
             return
         auto_upload = bool(wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")))
         if auto_upload:
-            self.screen("Auto uploads", "Auto will send any new WPA hashes to OnlineHashCrack. "
+            self.screen("Auto WiFi Attack uploads", "Auto will send any new WPA hashes to OnlineHashCrack. "
                         "Read and accept the terms before proceeding.\n"
                         "onlinehashcrack.com/terms-conditions.php",
                         (("Agree and continue", lambda: self.auto_password(adapter, True, self.start_auto)),
@@ -406,7 +408,7 @@ class App:
             self.gnss = gnss.GnssMonitor(wifi.HELPER, password)
             self.survey_cancel = threading.Event()
             self.next_survey = 0 if wigle.credentials() else float("inf")
-            self.work("Auto", "",
+            self.work(AUTO_ATTACK_TITLE, "",
                       lambda: wifi.auto_capture(adapter, password, self.cancel, self.report_capture,
                                                 auto_upload=auto_upload, pause=self.pause),
                       self.auto_done, self.auto, cancellable=True)
@@ -419,12 +421,12 @@ class App:
         if status.phase == "Stopped":
             self.home()
             return
-        self.screen("Auto", back=self.home)
+        self.screen(AUTO_ATTACK_TITLE, back=self.home)
         self.auto_status = status
 
     def about(self):
         self.screen("About", "Zerogotchi by unagisan69\n\n"
-                    "A Wi-Fi lab auditor for Cardputer Zero. Auto and Attack capture WPA handshakes. "
+                    "A Wi-Fi lab auditor for Cardputer Zero. Auto and Manual WiFi Attack capture WPA handshakes. "
                     "Wardriving logs GPS observations. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
                     back=self.home)
 
@@ -460,7 +462,7 @@ class App:
                     (("Okay", self.attack), ("Cancel", self.home)), self.home)
 
     def attack(self):
-        self.screen("Attack", items=(
+        self.screen(MANUAL_ATTACK_TITLE, items=(
             ("Scan nearby networks", self.start_scan), ("Saved captures", self.saved),
         ), back=self.home)
 
@@ -596,7 +598,7 @@ class App:
             (f"Wardriving Adapter: {wifi.read_setting('wardriving-adapter') or 'Built-in'}", self.wardrive_adapter),
             (f"WiFi Adapter: {'Built-in' if adapter == 'wlan0' else adapter or 'unset'}", self.adapter),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
-            (f"SSID blacklist: {exclusions}", self.edit_blacklist),
+            (f"SSID block list: {exclusions}", self.edit_block_list),
             (f"Private Zones: {zones}", self.private_zones),
             (f"WiGLE: {'credentials saved' if wigle.credentials() else 'not configured'}", self.wigle_settings),
             (f"WDG Wars: {'key saved' if wdgwars.credentials() else 'not configured'}", self.wdgwars_settings),
@@ -736,9 +738,9 @@ class App:
         current = zones[index] if index is not None else None
         open_editor(f"{current.latitude},{current.longitude},{current.radius}" if current else "")
 
-    def edit_blacklist(self):
+    def edit_block_list(self):
         def open_editor(value):
-            self.edit("SSID blacklist", "Separate names with commas. Quote names containing commas.",
+            self.edit("SSID block list", "Separate names with commas. Quote names containing commas.",
                       re.compile(r"[^\r\n]*"), 1024, save, self.settings, initial=value, tail=True)
 
         def save(value):

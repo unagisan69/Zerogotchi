@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.12
+tag=v0.4.13
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt
@@ -56,7 +56,7 @@ position when the receiver has obtained a fix.
 
 | Symptom | What to check |
 | --- | --- |
-| Auto skips many access points | Open **Auto → Session log** for each skip reason. Saved hashes, hidden SSIDs, blacklist entries, incompatible security, and unsupported channels all affect eligibility. |
+| Auto skips many access points | Open **Auto WiFi Attack → Session log** for each skip reason. Saved hashes, hidden SSIDs, block-list entries, incompatible security, and unsupported channels all affect eligibility. |
 | Monitor mode fails to start | Check that the selected USB adapter is disconnected from Wi-Fi. Zerogotchi attempts one reset for the supported RTL8821CU device `0bda:c811`. If that fails, reconnect the adapter and retry. |
 | Satellite icon is lit, but coordinates are blank | The HAT is communicating. Give the receiver time and a clear view of the sky to acquire a fix. |
 | A survey is absent from WiGLE | Select it under **Wardriving → Saved surveys**, confirm upload, and check WiGLE’s upload history. Accepted uploads may wait for processing. |
