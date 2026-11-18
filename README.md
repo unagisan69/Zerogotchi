@@ -44,11 +44,12 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | **[Manual WiFi Attack](docs/guide.md#manual-wifi-attack)** | Select an access point for Active Capture, Passive Capture, or Deauth Attack. Follow target and radio activity on the themed dashboard. Capture stops on a usable handshake or PMKID. |
 | **[Saved captures](docs/guide.md#saved-captures)** | Review captures by network name. Keeps PCAPs and target-filtered Hashcat mode 22000 files. Includes a confirmed **Clear all handshakes** action. |
 | **[Wardriving](docs/guide.md#wardriving)** | Scans Wi-Fi and Bluetooth LE concurrently, shows detections and new addresses separately, and saves new GPS-tagged observations to a local CSV. Press **P** to pause or resume. |
+| **[Meshmapping](docs/guide.md#meshmapping)** | Listen for MeshCore advertisements with the SX1262 LoRa cap. See unique nodes and GPS status, save GPS-tagged sightings, and optionally send mapped nodes to WDG Wars. |
 | **[OnlineHashCrack](docs/guide.md#onlinehashcrack)** | Submit WPA hashes from Saved captures, or let Auto send new results after upfront consent. Auto retries temporary connection failures. |
 | **[Lifetime Results](docs/guide.md#lifetime-results)** | View Auto and Manual capture counts and success rates, plus Wardriving discovery totals. Reset counters from the dashboard. |
 | **[SSID allow list](docs/guide.md#settings-and-dashboard)** | Limit Auto and Wardriving Wi-Fi discovery to specific network names. |
 | **[Survey uploads](docs/guide.md#survey-uploads)** | Send GPS-tagged surveys to WiGLE or WDG Wars, or choose **Upload to All** after Wardriving, or pick a saved survey later. |
-| **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving in GPS circles and filter observations against those zones and the SSID block list before sending. |
+| **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving and Meshmapping in GPS circles and filter observations against those zones and the SSID block list before sending. |
 | **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto WiFi Attack, Manual WiFi Attack, and Wardriving. Dashboard indicators use the Cardputer’s live status. |
 | **[In-app updates](docs/installation.md#install-or-upgrade)** | Check GitHub for a newer release and install its verified Debian package from the main menu. |
 

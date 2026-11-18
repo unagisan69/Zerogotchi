@@ -23,17 +23,21 @@ def credentials():
     return key if KEY.fullmatch(key) else None
 
 
-def request(path, *, networks=None):
+def request(path, *, networks=None, meshcore_nodes=None):
+    uploading = networks is not None or meshcore_nodes is not None
     key = credentials()
     if not key:
         raise wifi.WifiError("Save your WDG Wars API key first")
-    args = ["curl", "--disable", "--silent", "--show-error", "--max-time", "115" if networks is not None else "15",
+    args = ["curl", "--disable", "--silent", "--show-error", "--max-time", "115" if uploading else "15",
             "--proto", "=https", "--header", "Accept: application/json",
             "--config", "-", "--write-out", "\n%{http_code}"]
     config = f'header = "X-API-Key: {key}"\n'
-    if networks is not None:
+    if uploading:
         # The official client signs the nonce followed by the base64 JSON.
-        raw = json.dumps({"networks": networks}, separators=(",", ":")).encode("utf-8")
+        payload = {"networks": networks or []}
+        if meshcore_nodes is not None:
+            payload["meshcore_nodes"] = meshcore_nodes
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         data = base64.b64encode(raw).decode("ascii")
         nonce = secrets.token_hex(8)
         signature = hmac.new(key.encode("ascii"), (nonce + data).encode("ascii"), hashlib.sha256).hexdigest()
@@ -42,7 +46,7 @@ def request(path, *, networks=None):
         config += 'data-binary = ' + json.dumps(payload) + "\n"
     try:
         response = subprocess.run([*args, BASE_URL + path], text=True, capture_output=True,
-                                  input=config, timeout=120 if networks is not None else 17)
+                                  input=config, timeout=120 if uploading else 17)
     except (OSError, subprocess.SubprocessError) as error:
         raise wifi.WifiError("WDG Wars connection failed") from error
     if response.returncode:
@@ -54,7 +58,7 @@ def request(path, *, networks=None):
         result = {}
     if not isinstance(result, dict):
         result = {}
-    if status == "409" and result.get("error") == "duplicate_upload" and networks is not None:
+    if status == "409" and result.get("error") == "duplicate_upload" and uploading:
         return {}
     if status == "429":
         wait = result.get("retry_after")
@@ -117,6 +121,26 @@ def upload(path):
             rejected += counts[2] + counts[3]
     message = f"Imported {imported}. Duplicates {duplicates}. Rejected {rejected}."
     unreported = submitted - imported - duplicates - rejected
+    if unreported > 0:
+        message += f" No result for {unreported}."
+    return message
+
+
+def upload_mesh(records):
+    imported = already_seen = 0
+    for start in range(0, len(records), 1_000):
+        batch = records[start:start + 1_000]
+        result = request("/api/upload/", meshcore_nodes=batch)
+        if not result:
+            already_seen += len(batch)
+            continue
+        counts = [result.get(key, 0) for key in ("meshcore_imported", "meshcore_already_seen")]
+        if any(type(count) is not int or count < 0 for count in counts):
+            raise wifi.WifiError("WDG Wars returned invalid mesh upload counts")
+        imported += counts[0]
+        already_seen += counts[1]
+    message = f"MeshCore imported {imported}. Already seen {already_seen}."
+    unreported = len(records) - imported - already_seen
     if unreported > 0:
         message += f" No result for {unreported}."
     return message

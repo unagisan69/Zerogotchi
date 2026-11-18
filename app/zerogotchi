@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import gnss
 import lifetime
+import meshmapping
 import survey_privacy
 import updater
 import wdgwars
@@ -189,6 +190,13 @@ class Display:
         draw.text((123, 9), phase, font=self.title, fill=TEAL)
         if isinstance(status, wigle.WardriveStatus):
             self.draw_wardrive_stats(draw, status, location, satellites)
+        elif isinstance(status, meshmapping.Status):
+            draw.text((124, 32), status.profile or "Meshmapping", font=self.small, fill=MUTED)
+            draw.text((124, 49), f"{status.meshcore} MeshCore nodes",
+                      font=self.body, fill=WHITE)
+            self.draw_survey_gps(draw, status.phase, location, satellites)
+            if status.phase != "Private":
+                draw.text((124, 121), f"{status.located} GPS-tagged nodes", font=self.small, fill=MUTED)
         elif isinstance(status, wifi.AttackStatus):
             self.draw_attack_stats(draw, status)
         else:
@@ -245,9 +253,14 @@ class Display:
                   font=self.small, fill=MUTED)
         draw.text((124, 49), f"New: {status.networks} Wi-Fi  •  {status.bluetooth} BLE",
                   font=self.body, fill=WHITE)
+        self.draw_survey_gps(draw, status.phase, location, satellites)
+        if status.error:
+            draw.text((124, 121), status.error, font=self.small, fill=MUTED)
+
+    def draw_survey_gps(self, draw, phase, location, satellites):
         count = "—" if satellites is None else str(satellites)
         draw.text((124, 67), f"Satellites in view: {count}", font=self.body, fill=WHITE)
-        if status.phase == "Private":
+        if phase == "Private":
             draw.text((124, 99), "Private zone: scan paused", font=self.body, fill=TEAL)
             return
         if location:
@@ -257,8 +270,6 @@ class Display:
             draw.text((124, 102), f"{latitude}, {longitude}", font=self.body, fill=WHITE)
         else:
             draw.text((124, 99), "Waiting for GPS fix", font=self.body, fill=MUTED)
-        if status.error:
-            draw.text((124, 121), status.error, font=self.small, fill=MUTED)
 
     def draw_attack_stats(self, draw, status):
         network = status.network
@@ -336,7 +347,8 @@ class App:
 
     def home(self):
         self.screen("Zerogotchi", items=(
-            (AUTO_ATTACK_TITLE, self.auto), ("Wardriving", self.wardriving), (MANUAL_ATTACK_TITLE, self.disclaimer),
+            (AUTO_ATTACK_TITLE, self.auto), ("Wardriving", self.wardriving),
+            ("Meshmapping", self.meshmapping), (MANUAL_ATTACK_TITLE, self.disclaimer),
             ("Results", self.results), ("About", self.about),
             ("Settings", self.settings), ("Update", self.update), ("Exit", self.exit),
         ), back=self.exit)
@@ -413,6 +425,56 @@ class App:
         options += (("Exit to main menu", self.home),)
         self.screen("Wardriving stopped", summary, options, back=self.home)
 
+    def meshmapping(self):
+        region = self.mesh_region_key()
+        self.screen("Meshmapping", "Listen for MeshCore advertisements with the LoRa cap.",
+                    (("Start", self.start_meshmapping),
+                     (f"Radio presets: {meshmapping.REGIONS[region][0]}", self.mesh_region)),
+                    back=self.home)
+
+    def mesh_region_key(self):
+        region = wifi.read_setting("mesh-region")
+        return region if region in meshmapping.REGIONS else "us"
+
+    def mesh_region(self):
+        def save(region):
+            wifi.save_setting("mesh-region", region)
+            self.meshmapping()
+
+        self.screen("Mesh radio presets", "Choose presets that match your local mesh.",
+                    tuple((label, lambda region=region: save(region))
+                          for region, (label, _) in meshmapping.REGIONS.items()), self.meshmapping)
+
+    def start_meshmapping(self):
+        region = self.mesh_region_key()
+        monitor = gnss.GnssMonitor(wifi.HELPER, "", enable_power=False)
+        self.gnss = monitor
+        self.wardrive_location = None
+        self.work("Meshmapping", "",
+                  lambda: meshmapping.run(region, lambda: monitor.position(time.monotonic()),
+                                          self.cancel, self.report_capture),
+                  self.meshmapping_done, self.meshmapping, cancellable=True)
+        self.auto_status = meshmapping.Status("Starting")
+
+    def meshmapping_done(self, survey):
+        stats = survey.status
+        message = (f"{stats.meshcore} MeshCore nodes heard. "
+                   f"{stats.located} GPS-tagged nodes saved.")
+        options = ()
+        if wdgwars.credentials() and any(meshmapping.upload_records(survey)):
+            options = (("Upload to WDG Wars", lambda: self.confirm_mesh_upload(survey)),)
+        options += (("Exit to main menu", self.home),)
+        self.screen("Meshmapping stopped", message, options, back=self.home)
+
+    def confirm_mesh_upload(self, survey):
+        def back():
+            self.meshmapping_done(survey)
+
+        self.screen("Upload MeshCore nodes?", "Send mapped MeshCore IDs, names, GPS locations, and signal levels?",
+                    (("Upload", lambda: self.provider_request(
+                        "WDG Wars", lambda: meshmapping.upload(survey), back)),
+                     ("Cancel", back)), back)
+
     def auto_log(self):
         try:
             with wifi.AUTO_LOG.open(encoding="utf-8") as source:
@@ -467,7 +529,7 @@ class App:
     def about(self):
         self.screen("About", "Zerogotchi by unagisan69\n\n"
                     "A Wi-Fi lab auditor for Cardputer Zero. Auto and Manual WiFi Attack capture WPA handshakes. "
-                    "Wardriving logs Wi-Fi and Bluetooth LE with GPS. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
+                    "Wardriving logs Wi-Fi and Bluetooth LE with GPS. Meshmapping listens for LoRa nodes. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
                     back=self.home)
 
     def update(self):
@@ -916,6 +978,8 @@ class App:
                 self.cancel.set()
                 if isinstance(self.auto_status, wigle.WardriveStatus):
                     self.screen("Stopping Wardriving", "Finishing the current scan…", footer="Please wait")
+                elif isinstance(self.auto_status, meshmapping.Status):
+                    self.screen("Stopping Meshmapping", "Saving mesh observations…", footer="Please wait")
                 elif isinstance(self.auto_status, wifi.AutoStatus):
                     self.screen("Stopping Auto", "Finishing the current operation…", footer="Please wait")
                 else:
@@ -1005,7 +1069,7 @@ class App:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
                 if self.future and self.cancellable and not self.cancel.is_set():
                     update = self.capture_update
-                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus)) and update != self.auto_status:
+                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus, meshmapping.Status)) and update != self.auto_status:
                         self.auto_status, self.dirty = update, True
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
@@ -1028,7 +1092,7 @@ class App:
                     listening_since = None
                 if self.auto_status:
                     self.poll_device_status(now)
-                    if isinstance(self.auto_status, wigle.WardriveStatus):
+                    if isinstance(self.auto_status, (wigle.WardriveStatus, meshmapping.Status)):
                         sat_count = self.gnss.satellites(now) if self.gnss else None
                         if sat_count != satellites:
                             satellites, self.dirty = sat_count, True

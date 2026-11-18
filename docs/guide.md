@@ -3,7 +3,7 @@
 [Back to Zerogotchi](../README.md) · [Installation](installation.md)
 
 [Auto WiFi Attack](#auto-wifi-attack) · [Manual WiFi Attack](#manual-wifi-attack) · [Saved captures](#saved-captures) ·
-[Wardriving](#wardriving) · [Settings](#settings-and-dashboard) ·
+[Wardriving](#wardriving) · [Meshmapping](#meshmapping) · [Settings](#settings-and-dashboard) ·
 [OnlineHashCrack](#onlinehashcrack) · [Private Zones](#private-zones) · [Survey uploads](#survey-uploads)
 
 Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go
@@ -89,6 +89,27 @@ CSV. The address index survives app restarts and also imports addresses from
 existing local surveys. BLE devices that rotate addresses may appear more than
 once. The Wi-Fi adapter defaults to the onboard `wlan0` and can be changed
 in Settings.
+
+## Meshmapping
+
+1. Attach the **Cap LoRa-1262** with its antenna. Select **Meshmapping** below
+   **Wardriving** on the main menu.
+2. Under **Radio presets**, select the profile that matches your local network.
+   The default USA profile listens at 910.525 MHz (SF7, BW62.5, CR5). EU/UK
+   listens at 869.618 MHz (SF8, BW62.5, CR8).
+3. Select **Start**. The receiver listens continuously and never transmits.
+   The dashboard counts unique, signed MeshCore advertisements and displays
+   the current GPS position, estimated accuracy, and satellites in view.
+   A forwarded advertisement can identify a node beyond direct radio range.
+4. Press **Esc** to stop. GPS-tagged sightings are saved in
+   `~/.local/share/zerogotchi/mesh/`. If a WDG Wars key is configured and
+   there are mappable nodes, choose **Upload to WDG Wars** and confirm.
+
+Uploads use advertised node coordinates when available. For a directly
+received advertisement without coordinates, the receiver's GPS fix marks
+the reception location. Forwarded advertisements without node coordinates
+stay in the local survey. Private Zones pause listening and are checked
+again before upload.
 
 ## Lifetime Results
 

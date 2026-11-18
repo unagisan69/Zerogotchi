@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.16
+tag=v0.4.17
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt
@@ -41,6 +41,7 @@ sudo apt install ./zerogotchi_all.deb
 | --- | --- |
 | Scan for networks | Built-in Wi-Fi (`wlan0`) or a compatible managed Wi-Fi adapter |
 | Wardriving | Built-in Wi-Fi and Bluetooth LE. Change the Wi-Fi interface under **Settings → Wardriving Adapter**. |
+| Meshmapping | Cap LoRa-1262 (SX1262 radio and built-in GNSS). Attach the supplied antenna. |
 | Passive capture, Active Capture, and Auto | A disconnected USB Wi-Fi adapter with monitor mode. Active Capture and Auto deauth also require injection. |
 
 Use `/usr/sbin/iw dev` to identify interface names. In **Settings → WiFi Adapter**,

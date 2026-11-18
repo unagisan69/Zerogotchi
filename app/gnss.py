@@ -75,7 +75,7 @@ def parse_satellites(line):
 
 
 class GnssMonitor:
-    def __init__(self, helper, password):
+    def __init__(self, helper, password, *, enable_power=True):
         self.fd = self.saved = self.power = None
         self.partial = b""
         self.last_seen = float("-inf")
@@ -94,7 +94,7 @@ class GnssMonitor:
             mode = termios.tcgetattr(self.fd)
             mode[4] = mode[5] = termios.B115200
             termios.tcsetattr(self.fd, termios.TCSANOW, mode)
-            if RAIL.read_text().strip() == "0":
+            if enable_power and RAIL.read_text().strip() == "0":
                 self.power = subprocess.Popen(
                     ["sudo", "-Sk", "-p", "", "--", helper, "gnss"],
                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

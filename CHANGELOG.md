@@ -10,6 +10,10 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.17](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.17)
+
+- Added receive-only **Meshmapping** for the Cap LoRa-1262, with unique MeshCore nodes, GPS status, local surveys, and optional WDG Wars export.
+
 ## [0.4.16](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.16)
 
 - Put **Upload to All** first in Wardriving export menus and preselect **Upload** on the confirmation screen.
