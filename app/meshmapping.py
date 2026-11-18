@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
+import re
 import struct
 import tempfile
 import time
@@ -97,6 +98,26 @@ def save_survey(records):
                 os.unlink(temporary)
 
 
+def saved_surveys():
+    folder = wifi.DATA / "mesh"
+    return sorted((path for path in folder.glob("mesh-*.json")
+                   if not path.is_symlink() and path.is_file()), reverse=True)
+
+
+def load_survey(path):
+    try:
+        records = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(records, list) or any(
+            not isinstance(row, dict) or not {
+                "node_id", "node_type", "name", "rssi", "first_seen", "receiver", "advertised", "direct"
+            }.issubset(row) for row in records
+        ):
+            raise ValueError("Invalid mesh survey")
+    except (OSError, ValueError) as error:
+        raise wifi.WifiError("Could not read the saved mesh survey") from error
+    return Survey(Status("Saved", meshcore=len(records), located=len(records)), tuple(records))
+
+
 def run(region, position, cancel, report):
     _, profile = REGIONS[region]
     zones = survey_privacy.zones()
@@ -149,6 +170,10 @@ def run(region, position, cancel, report):
 def upload_records(survey):
     zones = survey_privacy.zones()
     for row in survey.records:
+        public_key = row["node_id"]
+        if not isinstance(public_key, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", public_key):
+            continue
+        public_key = public_key.lower()
         lat, lon, accuracy = row["receiver"]
         if survey_privacy.private(gnss.Fix(lat, lon, 0, accuracy, 0), zones):
             continue
@@ -159,8 +184,9 @@ def upload_records(survey):
             continue
         if (lat or lon) and not survey_privacy.private(gnss.Fix(lat, lon, 0, accuracy, 0), zones):
             yield {
-                **{key: row[key] for key in ("node_id", "node_type", "name", "rssi", "first_seen")},
-                "lat": lat, "lon": lon, "type": "MESHCORE",
+                **{key: row[key] for key in ("node_type", "name", "rssi", "first_seen")},
+                "node_id": public_key[:16], "public_key": public_key,
+                "lat": lat, "lon": lon, "type": "MESHCORE", "network": "meshcore",
             }
 
 

@@ -1,6 +1,7 @@
 """WDG Wars account checks and signed survey upload."""
 
 import base64
+from collections import Counter
 import csv
 import hashlib
 import hmac
@@ -127,20 +128,30 @@ def upload(path):
 
 
 def upload_mesh(records):
-    imported = already_seen = 0
+    imported = already_seen = merged = rejected = 0
+    reasons = Counter()
     for start in range(0, len(records), 1_000):
         batch = records[start:start + 1_000]
         result = request("/api/upload/", meshcore_nodes=batch)
         if not result:
             already_seen += len(batch)
             continue
-        counts = [result.get(key, 0) for key in ("meshcore_imported", "meshcore_already_seen")]
+        counts = [result.get(f"meshcore_{key}", 0)
+                  for key in ("imported", "already_seen", "merged", "rejected")]
         if any(type(count) is not int or count < 0 for count in counts):
             raise wifi.WifiError("WDG Wars returned invalid mesh upload counts")
         imported += counts[0]
         already_seen += counts[1]
-    message = f"MeshCore imported {imported}. Already seen {already_seen}."
-    unreported = len(records) - imported - already_seen
+        merged += counts[2]
+        rejected += counts[3]
+        detail = result.get("meshcore_reject_reasons")
+        if isinstance(detail, dict):
+            reasons.update({key.replace("_", " "): count for key, count in detail.items()
+                            if re.fullmatch(r"[a-z_]{1,40}", key) and type(count) is int and count > 0})
+    message = f"MeshCore imported {imported}. Already seen {already_seen}. Merged {merged}. Rejected {rejected}."
+    if rejected and reasons:
+        message += "\n" + ", ".join(f"{reason} ({count})" for reason, count in reasons.most_common(3))
+    unreported = len(records) - imported - already_seen - merged - rejected
     if unreported > 0:
         message += f" No result for {unreported}."
     return message

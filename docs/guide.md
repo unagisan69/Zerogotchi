@@ -103,7 +103,8 @@ in Settings.
    A forwarded advertisement can identify a node beyond direct radio range.
 4. Press **Esc** to stop. GPS-tagged sightings are saved in
    `~/.local/share/zerogotchi/mesh/`. If a WDG Wars key is configured and
-   there are mappable nodes, choose **Upload to WDG Wars** and confirm.
+   there are mappable nodes, choose **Upload to WDG Wars** and confirm. To
+   retry an earlier upload, open **Meshmapping → Saved surveys**.
 
 Uploads use advertised node coordinates when available. For a directly
 received advertisement without coordinates, the receiver's GPS fix marks

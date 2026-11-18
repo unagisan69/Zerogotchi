@@ -428,9 +428,24 @@ class App:
     def meshmapping(self):
         region = self.mesh_region_key()
         self.screen("Meshmapping", "Listen for MeshCore advertisements with the LoRa cap.",
-                    (("Start", self.start_meshmapping),
+                    (("Start", self.start_meshmapping), ("Saved surveys", self.saved_mesh_surveys),
                      (f"Radio presets: {meshmapping.REGIONS[region][0]}", self.mesh_region)),
                     back=self.home)
+
+    def saved_mesh_surveys(self):
+        paths = meshmapping.saved_surveys()
+
+        def open_survey(path):
+            try:
+                survey = meshmapping.load_survey(path)
+                self.meshmapping_done(survey, back=self.saved_mesh_surveys)
+            except (wifi.WifiError, TypeError, ValueError) as error:
+                message = str(error) if isinstance(error, wifi.WifiError) else "The survey contains invalid data."
+                self.screen("Meshmapping", message, back=self.saved_mesh_surveys)
+
+        self.screen("Saved mesh surveys", "" if paths else "No GPS-tagged mesh surveys yet.",
+                    tuple((path.stem[5:20], lambda path=path: open_survey(path)) for path in paths),
+                    back=self.meshmapping)
 
     def mesh_region_key(self):
         region = wifi.read_setting("mesh-region")
@@ -456,19 +471,19 @@ class App:
                   self.meshmapping_done, self.meshmapping, cancellable=True)
         self.auto_status = meshmapping.Status("Starting")
 
-    def meshmapping_done(self, survey):
+    def meshmapping_done(self, survey, back=None):
         stats = survey.status
         message = (f"{stats.meshcore} MeshCore nodes heard. "
                    f"{stats.located} GPS-tagged nodes saved.")
         options = ()
         if wdgwars.credentials() and any(meshmapping.upload_records(survey)):
-            options = (("Upload to WDG Wars", lambda: self.confirm_mesh_upload(survey)),)
-        options += (("Exit to main menu", self.home),)
-        self.screen("Meshmapping stopped", message, options, back=self.home)
+            options = (("Upload to WDG Wars", lambda: self.confirm_mesh_upload(survey, back)),)
+        options += (("Back to saved surveys", back) if back else ("Exit to main menu", self.home),)
+        self.screen("Saved mesh survey" if back else "Meshmapping stopped", message, options, back=back or self.home)
 
-    def confirm_mesh_upload(self, survey):
+    def confirm_mesh_upload(self, survey, previous=None):
         def back():
-            self.meshmapping_done(survey)
+            self.meshmapping_done(survey, back=previous)
 
         self.screen("Upload MeshCore nodes?", "Send mapped MeshCore IDs, names, GPS locations, and signal levels?",
                     (("Upload", lambda: self.provider_request(
