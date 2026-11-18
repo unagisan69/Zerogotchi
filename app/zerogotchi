@@ -409,9 +409,8 @@ class App:
     def wardrive_done(self, status):
         summary = (f"{status.networks} new Wi-Fi networks and {status.bluetooth} new BLE addresses saved. "
                    f"{status.scans} Wi-Fi scans.")
-        options = (("Exit to main menu", self.home),)
-        if status.survey:
-            options += self.survey_options(status.survey, lambda: self.wardrive_done(status), self.home)
+        options = self.survey_options(status.survey, lambda: self.wardrive_done(status), self.home) if status.survey else ()
+        options += (("Exit to main menu", self.home),)
         self.screen("Wardriving stopped", summary, options, back=self.home)
 
     def auto_log(self):
@@ -704,8 +703,8 @@ class App:
                          self.confirm_survey(name, ((name, provider),), path, back, done))
                         for name, provider in providers)
         if len(providers) == 2:
-            options += (("Upload to both", lambda: self.confirm_survey(
-                "both services", providers, path, back, done)),)
+            options = (("Upload to All", lambda: self.confirm_survey(
+                "all services", providers, path, back, done)),) + options
         return options
 
     def confirm_survey(self, destination, providers, path, back, done):
@@ -721,7 +720,7 @@ class App:
 
         self.screen(f"Upload to {destination}?",
                     "Send filtered Wi-Fi and BLE addresses, names, signal levels, and GPS locations?",
-                    (("Cancel", back), ("Upload", lambda: self.provider_request("Survey upload", upload, done))),
+                    (("Upload", lambda: self.provider_request("Survey upload", upload, done)), ("Cancel", back)),
                     back)
 
     def wigle_request(self, action, back=None):

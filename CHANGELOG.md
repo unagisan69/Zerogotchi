@@ -10,6 +10,10 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.16](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.16)
+
+- Put **Upload to All** first in Wardriving export menus and preselect **Upload** on the confirmation screen.
+
 ## [0.4.15](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.15)
 
 - Scan Wi-Fi and Bluetooth LE concurrently and show Wi-Fi detections separately from newly logged addresses.

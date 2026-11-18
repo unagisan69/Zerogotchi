@@ -79,7 +79,7 @@ OnlineHashCrack tasks stay available.
    and longitude. Previously logged BSSIDs still count as seen. A stale position is labeled **Last GPS fix**.
 3. Press **Esc** to stop. With a saved survey, the summary offers each upload
    service that has credentials configured, along with **Exit to main menu**.
-   With both accounts configured, **Upload to both** submits to each service.
+   With both accounts configured, **Upload to All** appears first and submits to each service after confirmation. **Upload** is preselected on the confirmation screen.
    Find local reports later under **Wardriving → Saved surveys**.
 
 Wardriving scans Wi-Fi through NetworkManager and Bluetooth LE through the
