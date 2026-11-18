@@ -15,7 +15,7 @@ sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
 git clone https://github.com/unagisan69/Zerogotchi.git
 cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.5_all.deb
+sudo apt install ./build/zerogotchi_0.4.6_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in

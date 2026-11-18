@@ -37,15 +37,16 @@ KEYS = {
 SHIFTED = dict(zip("1234567890-=;',./[]`", "!@#$%^&*()_+:\"<>?{}~"))
 USB_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}")
 THEMES = {"acidburn": "Acidburn", "computer": "Computer"}
+LISTENING_FRAMES = ("angry", "angry_storm_1", "angry_storm_2")
 ACIDBURN_MOODS = {
-    "Checking": "bored",
+    "Checking": "happy",
     "Deauthing": "angry",
     "Idling": "sleepy",
     "Retrying": "surprised",
     "Saving": "happy",
     "Skipping": "sad",
     "Stopped": "sad",
-    "Uploading": "excited",
+    "Uploading": "happy",
 }
 
 
@@ -144,7 +145,7 @@ class Display:
         else:
             draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
 
-    def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn"):
+    def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn", listening_frame=0):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
@@ -154,7 +155,9 @@ class Display:
         caption_y = 110
         if theme == "acidburn":
             try:
-                icon, mask = acidburn_face(ACIDBURN_MOODS.get(phase, "neutral"))
+                mood = (LISTENING_FRAMES[listening_frame] if phase == "Listening"
+                        else ACIDBURN_MOODS.get(phase, "neutral"))
+                icon, mask = acidburn_face(mood)
                 image.paste(icon, (15, 16), mask)
                 caption_y = 116
             except OSError:
@@ -186,27 +189,27 @@ class Display:
             draw.text((124, 125), f"{status.uploaded} uploaded  •  {status.queued} queued",
                       font=self.small, fill=MUTED)
         draw.line((12, 142, 308, 142), fill=PANEL)
-        draw.text((12, 150), "Esc Back" if resting else "Esc Stop sweep", font=self.small, fill=MUTED)
+        draw.text((12, 150), "Esc Back" if resting else "Esc to stop", font=self.small, fill=MUTED)
         gps_color = TEAL if gps_on else MUTED
         net_color = TEAL if online else MUTED
-        # Satellite, globe, and battery all fit in the status strip.
-        draw.line((192, 160, 199, 153), fill=gps_color, width=2)
-        draw.arc((191, 146, 205, 159), 90, 180, fill=gps_color, width=2)
-        draw.arc((198, 144, 209, 154), 272, 355, fill=gps_color)
-        draw.ellipse((215, 149, 229, 163), outline=net_color)
-        draw.ellipse((220, 149, 224, 163), outline=net_color)
-        draw.line((216, 156, 228, 156), fill=net_color)
+        # Angled solar panels and a radio beam distinguish the satellite from the globe.
+        draw.polygon(((220, 151), (225, 146), (229, 150), (224, 155)), fill=gps_color)
+        draw.polygon(((231, 162), (236, 157), (240, 161), (235, 166)), fill=gps_color)
+        draw.polygon(((224, 157), (231, 150), (236, 155), (229, 162)), outline=gps_color)
+        draw.arc((234, 144, 242, 152), 270, 360, fill=gps_color)
+        draw.arc((235, 141, 246, 153), 273, 355, fill=gps_color)
+        draw.ellipse((254, 149, 268, 163), outline=net_color)
+        draw.ellipse((259, 149, 263, 163), outline=net_color)
+        draw.line((255, 156, 267, 156), fill=net_color)
         if not gps_on:
-            draw.line((191, 148, 207, 163), fill="#e5a183", width=1)
+            draw.line((220, 146, 242, 165), fill="#e5a183", width=1)
         if not online:
-            draw.line((215, 149, 229, 163), fill="#e5a183", width=1)
-        color = "#ff9c73" if battery is not None and battery < 20 else TEAL
-        draw.rectangle((240, 150, 262, 162), outline=color)
-        draw.rectangle((263, 154, 265, 158), fill=color)
+            draw.line((254, 149, 268, 163), fill="#e5a183", width=1)
+        color = MUTED if battery is None else "#ff9c73" if battery < 20 else TEAL
+        draw.rectangle((281, 150, 303, 162), outline=color)
+        draw.rectangle((304, 154, 306, 158), fill=color)
         if battery:
-            draw.rectangle((242, 152, 241 + max(1, int(battery * .19)), 160), fill=color)
-        draw.text((307, 149), f"{battery}%" if battery is not None else "?%",
-                  anchor="rt", fill=color, font=self.small)
+            draw.rectangle((283, 152, 282 + max(1, int(battery * .19)), 160), fill=color)
         self.paint(image)
 
     def paint(self, image):
@@ -690,6 +693,8 @@ class App:
         repaint_until = time.monotonic() + 2.0
         last_paint = 0.0
         last_blink = False
+        listening_since = None
+        last_listening_frame = 0
         try:
             while self.running:
                 if self.future and self.future.done():
@@ -716,11 +721,20 @@ class App:
                     if gps_on != self.gps_on:
                         self.gps_on, self.dirty = gps_on, True
                 blink = self.theme == "computer" and int(now * 5) % 18 == 0
+                listening_frame = 0
+                if self.theme == "acidburn" and self.auto_status and self.auto_status.phase == "Listening":
+                    if listening_since is None:
+                        listening_since = now
+                    listening_frame = int((now - listening_since) * 3) % len(LISTENING_FRAMES)
+                else:
+                    listening_since = None
                 if self.auto_status:
                     self.poll_device_status(now)
                     self.poll_survey(now)
-                if self.auto_status and (self.dirty or blink != last_blink):
-                    self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online, self.battery, self.theme)
+                if self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
+                    self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,
+                                           self.battery, self.theme, listening_frame)
+                    last_listening_frame = listening_frame
                     self.dirty, last_paint, last_blink = False, now, blink
                 elif self.dirty:
                     footer = self.footer

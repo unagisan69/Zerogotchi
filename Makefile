@@ -1,4 +1,4 @@
-VERSION = 0.4.5
+VERSION = 0.4.6
 ARCH = all
 PACKAGE = build/zerogotchi_$(VERSION)_$(ARCH).deb
 STAGE = build/package
