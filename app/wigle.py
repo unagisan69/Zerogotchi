@@ -180,6 +180,7 @@ class WardriveStatus:
     networks: int = 0
     observations: int = 0
     error: str = ""
+    survey: Path | None = None
 
 
 def wardrive(interface, position, cancel, report, *, interval=12):
@@ -211,4 +212,4 @@ def wardrive(interface, position, cancel, report, *, interval=12):
         phase = "Retrying" if error else "Listening" if position() else "Locating"
         report(WardriveStatus(phase, scans, len(seen), observations, error))
         cancel.wait(interval)
-    return WardriveStatus("Stopped", scans, len(seen), observations)
+    return WardriveStatus("Stopped", scans, len(seen), observations, survey=survey)

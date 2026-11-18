@@ -18,6 +18,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 import gnss
+import updater
 import wifi
 import wigle
 
@@ -179,6 +180,8 @@ class Display:
         draw.text((123, 9), phase, font=self.title, fill=TEAL)
         if isinstance(status, wigle.WardriveStatus):
             self.draw_wardrive_stats(draw, status, location)
+        elif isinstance(status, wifi.AttackStatus):
+            self.draw_attack_stats(draw, status)
         else:
             phase_detail = {"Idling": "Sweep complete", "Uploading": "Sending saved hashes"}
             name = status.network or phase_detail.get(status.phase, "Looking for networks")
@@ -206,15 +209,16 @@ class Display:
         gps_color = TEAL if gps_on else MUTED
         net_color = TEAL if online else MUTED
         # All three symbols occupy the same 14-pixel band.
-        draw.polygon(((226, 152), (229, 149), (232, 152), (229, 155)), fill=gps_color)
-        draw.polygon(((234, 159), (237, 156), (240, 159), (237, 162)), fill=gps_color)
-        draw.polygon(((229, 157), (234, 152), (237, 155), (232, 160)), outline=gps_color)
-        draw.arc((236, 149, 243, 156), 270, 360, fill=gps_color)
+        if not isinstance(status, wifi.AttackStatus):
+            draw.polygon(((226, 152), (229, 149), (232, 152), (229, 155)), fill=gps_color)
+            draw.polygon(((234, 159), (237, 156), (240, 159), (237, 162)), fill=gps_color)
+            draw.polygon(((229, 157), (234, 152), (237, 155), (232, 160)), outline=gps_color)
+            draw.arc((236, 149, 243, 156), 270, 360, fill=gps_color)
+            if not gps_on:
+                draw.line((226, 149, 242, 162), fill="#e5a183")
         draw.ellipse((254, 149, 267, 162), outline=net_color)
         draw.ellipse((259, 149, 262, 162), outline=net_color)
         draw.line((255, 155, 266, 155), fill=net_color)
-        if not gps_on:
-            draw.line((226, 149, 242, 162), fill="#e5a183")
         if not online:
             draw.line((254, 149, 267, 162), fill="#e5a183")
         color = MUTED if battery is None else "#ff9c73" if battery < 20 else TEAL
@@ -239,6 +243,29 @@ class Display:
             draw.text((124, 99), "Waiting for GPS fix", font=self.body, fill=MUTED)
         if status.error:
             draw.text((124, 121), "Scan unavailable; retrying", font=self.small, fill=MUTED)
+
+    def draw_attack_stats(self, draw, status):
+        network = status.network
+        name = "".join(char if char.isprintable() else " " for char in network.ssid) or "Hidden SSID"
+        while draw.textlength(name, font=self.body) > 180:
+            name = name[:-2] + "…"
+        draw.text((124, 31), status.operation, font=self.small, fill=MUTED)
+        draw.text((124, 46), name, font=self.body, fill=WHITE)
+        draw.text((124, 63), f"{network.bssid}  •  {network.frequency} MHz",
+                  font=self.small, fill=MUTED)
+        has_capture = status.operation != "Deauth Attack"
+        metrics = f"{status.elapsed}s elapsed"
+        if has_capture:
+            metrics += f"  •  {status.size / 1024:.1f} KiB captured"
+        draw.text((124, 80), metrics, font=self.small, fill=WHITE)
+        if status.operation != "Passive Capture":
+            draw.text((124, 96), f"{status.clients} clients  •  {status.bursts} bursts",
+                      font=self.small, fill=WHITE)
+            draw.text((124, 111), f"{status.attempts} attempts  •  {status.failures} failed",
+                      font=self.small, fill=MUTED)
+        if has_capture:
+            label = f"{status.result} found" if status.result else "Waiting for handshake or PMKID"
+            draw.text((124, 126), label, font=self.small, fill=TEAL if status.result else MUTED)
 
     def paint(self, image):
         self.frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
@@ -294,7 +321,7 @@ class App:
         self.screen("Zerogotchi", items=(
             ("Auto", self.auto), ("Wardriving", self.wardriving), ("Attack", self.disclaimer),
             ("About", self.about),
-            ("Settings", self.settings), ("Exit", self.exit),
+            ("Settings", self.settings), ("Update", self.update), ("Exit", self.exit),
         ), back=self.exit)
 
     def auto(self):
@@ -324,11 +351,14 @@ class App:
                   re.compile(r"[ -~]{1,256}"), 256, authenticate, self.wardriving, masked=True)
 
     def wardrive_done(self, status):
-        self.screen("Wardriving stopped",
-                    f"{status.networks} networks seen in {status.scans} scans. "
-                    f"{status.observations} GPS observations saved.",
-                    (("Saved surveys", self.wigle_surveys),) if status.observations else (),
-                    back=self.wardriving)
+        summary = (f"{status.networks} networks in {status.scans} scans. "
+                   f"{status.observations} GPS observations saved.")
+        options = (("Exit to main menu", self.home),)
+        if status.survey and wigle.credentials():
+            summary += "\nUpload this GPS-tagged survey to WiGLE?"
+            options += (("Upload to WiGLE", lambda: self.wigle_request(
+                lambda: wigle.upload(status.survey), self.home)),)
+        self.screen("Wardriving stopped", summary, options, back=self.home)
 
     def auto_log(self):
         try:
@@ -382,9 +412,33 @@ class App:
         self.auto_status = status
 
     def about(self):
-        self.screen("About", "Zerogotchi is a Wi-Fi audit tool for Cardputer Zero. "
-                    "It finds nearby networks, captures WPA exchanges on authorized networks, "
-                    "and can submit saved hashes to OnlineHashCrack.", back=self.home)
+        self.screen("About", "Zerogotchi by unagisan69\n\n"
+                    "A Wi-Fi lab auditor for Cardputer Zero. Auto and Attack capture WPA handshakes. "
+                    "Wardriving logs GPS observations. Supports WiGLE, OnlineHashCrack, and face themes.",
+                    back=self.home)
+
+    def update(self):
+        self.work("Update", "Checking the latest GitHub release…", updater.check, self.update_available, self.home)
+
+    def update_available(self, release):
+        if not release.available:
+            self.screen("Up to date", f"Installed version: {release.current}", back=self.home)
+            return
+        self.screen("Update available", f"Installed: {release.current}\nGitHub: {release.latest}",
+                    (("Install update", lambda: self.update_password(release)), ("Cancel", self.home)),
+                    back=self.home)
+
+    def update_password(self, release):
+        def install(password):
+            self.work("Updating", "Downloading, verifying, and installing the release…",
+                      lambda: updater.install(release, password),
+                      lambda _: self.screen("Update installed",
+                                            f"Version {release.latest} is ready. Reopen from the launcher.",
+                                            (("Exit to launcher", self.exit),), back=self.exit),
+                      self.update)
+        self.edit("Cardputer user password", "Enter your Cardputer login password to install the update.",
+                  re.compile(r"[ -~]{1,256}"), 256, install,
+                  lambda: self.update_available(release), masked=True)
 
     def exit(self):
         self.running = False
@@ -419,9 +473,9 @@ class App:
         self.screen("Selected network",
                     f"{self.network_name(network)}  •  {network.security or 'Open'}\n"
                     f"{network.bssid}  •  {network.frequency} MHz",
-                    (("Passive Capture", lambda: self.start_capture(network, "passive", target)),
-                     ("Deauth Attack", lambda: self.confirm_attack(network, "deauth", target)),
-                     ("Active Capture", lambda: self.confirm_attack(network, "active", target))), back)
+                    (("Active Capture", lambda: self.confirm_attack(network, "active", target)),
+                     ("Passive Capture", lambda: self.start_capture(network, "passive", target)),
+                     ("Deauth Attack", lambda: self.confirm_attack(network, "deauth", target))), back)
 
     def confirm_attack(self, network, mode, back):
         title = "Active Capture" if mode == "active" else "Deauth Attack"
@@ -440,10 +494,12 @@ class App:
             return
 
         def authenticate(password):
-            title = {"passive": "Passive Capture", "active": "Active Capture", "deauth": "Deauth Attack"}[mode]
+            title = wifi.ATTACK_LABELS[mode]
             self.work(title, "Preparing USB adapter…",
-                      lambda: wifi.capture(network, adapter, mode, password, self.cancel, self.report_capture),
+                      lambda: wifi.capture(network, adapter, mode, password, self.cancel,
+                                           lambda _: None, attack_report=self.report_capture),
                       lambda result: self.capture_done(result, back), back, cancellable=True)
+            self.auto_status = wifi.AttackStatus("Tuning", title, network)
 
         self.edit("Cardputer user password",
                   "Enter your Cardputer login password to grant sudo radio access.",
@@ -686,7 +742,7 @@ class App:
                 self.cancel.set()
                 if isinstance(self.auto_status, wigle.WardriveStatus):
                     self.screen("Stopping Wardriving", "Finishing the current scan…", footer="Please wait")
-                elif self.auto_status:
+                elif isinstance(self.auto_status, wifi.AutoStatus):
                     self.screen("Stopping Auto", "Finishing the current operation…", footer="Please wait")
                 else:
                     self.screen("Finishing capture", "Saving received packets…", footer="Please wait")
@@ -774,7 +830,7 @@ class App:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
                 if self.future and self.cancellable and not self.cancel.is_set():
                     update = self.capture_update
-                    if isinstance(update, (wifi.AutoStatus, wigle.WardriveStatus)) and update != self.auto_status:
+                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus)) and update != self.auto_status:
                         self.auto_status, self.dirty = update, True
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
@@ -806,7 +862,7 @@ class App:
                             location = (*location[:3], False)
                         if location != self.wardrive_location:
                             self.wardrive_location, self.dirty = location, True
-                    else:
+                    elif isinstance(self.auto_status, wifi.AutoStatus):
                         self.poll_survey(now)
                 if self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
                     self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,

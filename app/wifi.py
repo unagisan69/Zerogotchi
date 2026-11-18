@@ -10,7 +10,7 @@ import select
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -66,6 +66,23 @@ class AutoStatus:
     queued: int = 0
     upload_failed: int = 0
     deauths: int = 0
+
+
+@dataclass(frozen=True)
+class AttackStatus:
+    phase: str
+    operation: str
+    network: Network
+    elapsed: int = 0
+    size: int = 0
+    clients: int = 0
+    attempts: int = 0
+    failures: int = 0
+    bursts: int = 0
+    result: str = ""
+
+
+ATTACK_LABELS = {"active": "Active Capture", "passive": "Passive Capture", "deauth": "Deauth Attack"}
 
 
 def split_nmcli(line):
@@ -233,7 +250,8 @@ def supported_channels(interface):
     return channels
 
 
-def capture(network, interface, mode, password, cancel, report, *, time_limit=None, radio_report=None, monitor=None):
+def capture(network, interface, mode, password, cancel, report, *, time_limit=None,
+            radio_report=None, monitor=None, attack_report=None):
     if not interface:
         raise WifiError("Set capture adapter in Settings")
     if interface == "wlan0":
@@ -296,6 +314,12 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                             radio_report(state, sent)
                             last_report = state, sent
                         size = os.fstat(output.fileno()).st_size if pcap else 0
+                        if attack_report:
+                            counts = re.search(r"Clients seen: (\d+)\s+Deauth attempts: (\d+) \| Failed attempts: (\d+)", radio.replace("\n", " | "))
+                            clients, attempts, failures = map(int, counts.groups()) if counts else (0, 0, 0)
+                            attack = AttackStatus(state, ATTACK_LABELS[mode], network,
+                                                  int(now - started), size, clients, attempts, failures, sent)
+                            attack_report(attack)
                         capture_progress = f"\nCaptured: {size // 1024} KiB\nWaiting for handshake or PMKID" if pcap else ""
                         report(f"{int(now-started)}s elapsed\n{radio}{capture_progress}")
                         if pcap and size > max(24, scanned_size) and now >= next_probe:
@@ -303,6 +327,8 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                             if radio_report:
                                 radio_report("Checking", sent)
                                 last_report = None
+                            if attack_report:
+                                attack_report(replace(attack, phase="Checking"))
                             try:
                                 hashes = extract_hashes(pcap, bssid, probe, timeout=5)
                             except (OSError, UnicodeError, subprocess.SubprocessError):
@@ -311,6 +337,8 @@ def capture(network, interface, mode, password, cancel, report, *, time_limit=No
                             if hashes:
                                 if radio_report:
                                     radio_report("Saving", sent)
+                                if attack_report:
+                                    attack_report(replace(attack, phase="Saving", result=hash_kind(hashes)))
                                 report(hash_kind(hashes) + " captured. Saving files…")
                                 break
                 finally:

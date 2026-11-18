@@ -1,8 +1,8 @@
-VERSION = 0.4.7
+VERSION = 0.4.8
 ARCH = all
 PACKAGE = build/zerogotchi_$(VERSION)_$(ARCH).deb
 STAGE = build/package
-SOURCES = app/zerogotchi app/wifi.py app/gnss.py app/wigle.py app/radio
+SOURCES = app/zerogotchi app/wifi.py app/gnss.py app/wigle.py app/updater.py app/radio
 THEME_ASSETS = $(wildcard app/themes/*/*.png)
 ASSETS = packaging/zerogotchi.desktop packaging/zerogotchi.png $(THEME_ASSETS)
 
@@ -17,6 +17,7 @@ $(PACKAGE): $(SOURCES) $(ASSETS) Makefile
 	install -Dm644 app/wifi.py $(STAGE)/usr/lib/zerogotchi/wifi.py
 	install -Dm644 app/gnss.py $(STAGE)/usr/lib/zerogotchi/gnss.py
 	install -Dm644 app/wigle.py $(STAGE)/usr/lib/zerogotchi/wigle.py
+	install -Dm644 app/updater.py $(STAGE)/usr/lib/zerogotchi/updater.py
 	set -e; for asset in $(THEME_ASSETS); do install -Dm644 "$$asset" "$(STAGE)/usr/lib/zerogotchi/$${asset#app/}"; done
 	install -d -m755 $(STAGE)/usr/bin
 	ln -s ../lib/zerogotchi/zerogotchi $(STAGE)/usr/bin/zerogotchi

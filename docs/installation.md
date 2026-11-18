@@ -14,6 +14,9 @@ sudo apt install ./zerogotchi.deb
 The package declares its runtime dependencies, which APT resolves.
 Use these same commands for upgrades. Installed packages and user data live
 in separate directories, so upgrades preserve settings and captures.
+You can also open **Update** on the main menu. It checks the latest GitHub
+release, verifies the Debian package and checksum, and asks for your Cardputer
+password before installation. Reopen Zerogotchi from the launcher when it finishes.
 
 The stock launcher reads the installed desktop entry from
 `/usr/share/APPLaunch/applications/` and adds a **Zerogotchi** tile.
@@ -25,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.7
+tag=v0.4.8
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt

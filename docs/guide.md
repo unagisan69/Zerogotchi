@@ -42,7 +42,9 @@ Select **Attack**, accept the scope disclaimer, scan, and select a BSSID.
 | **Deauth Attack** | Discovers clients on the selected AP and sends directed bursts until you press **Esc**. |
 | **Active Capture** | Captures while directing deauth bursts at observed clients on the selected AP. |
 
-Capture modes display live progress and stop on a usable result or **Esc**.
+The themed Attack dashboard shows the target, radio phase, elapsed time,
+capture size, client counts, deauth results, and handshake or PMKID progress.
+Capture modes stop on a usable result or **Esc**.
 Clients using Protected Management Frames may ignore injected deauth frames.
 Support for individual WPA/WPA2 security variants depends on the observed
 exchange and `hcxpcapngtool`.
@@ -68,8 +70,9 @@ OnlineHashCrack tasks stay available.
    power GPS.
 2. Watch completed scans, unique networks, logged GPS observations, and your
    latest latitude and longitude. A stale position is labeled **Last GPS fix**.
-3. Press **Esc** to stop, then open **Wardriving → Saved surveys** to find the
-   session CSV or upload it to WiGLE.
+3. Press **Esc** to stop. With WiGLE credentials and a saved survey, you can
+   upload the session from the summary or exit to the main menu. Find local
+   reports later under **Wardriving → Saved surveys**.
 
 Wardriving repeatedly scans with NetworkManager and respects the SSID
 blacklist. With a fresh fix, it adds observations with measured signal levels

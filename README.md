@@ -44,12 +44,13 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | Feature | What it does |
 | --- | --- |
 | **[Auto](docs/guide.md#auto)** | Visits eligible access points once, runs capture and directed deauth where the radio and channel allow it, then idles. Skips blacklisted SSIDs and BSSIDs with saved results. Shows a session-wide deauth count and logs why targets were skipped. |
-| **[Attack](docs/guide.md#attack)** | Select an access point for passive capture, Deauth Attack, or Active Capture. See live progress and stop automatically when a usable handshake or PMKID is found. |
+| **[Attack](docs/guide.md#attack)** | Select an access point for Active Capture, Passive Capture, or Deauth Attack. Follow target and radio activity on the themed dashboard. Capture stops on a usable handshake or PMKID. |
 | **[Saved captures](docs/guide.md#saved-captures)** | Review captures by network name. Keeps PCAPs and target-filtered Hashcat mode 22000 files. Includes a confirmed **Clear all handshakes** action. |
 | **[Wardriving](docs/guide.md#wardriving)** | Scans with a separately configurable adapter and shows unique networks, scan counts, GPS observation counts, and the latest fix. Saves a local WiGLE CSV when GPS has a fix. |
 | **[OnlineHashCrack](docs/guide.md#onlinehashcrack)** | Submit WPA hashes from Saved captures, or let Auto send new results after upfront consent. Auto retries temporary connection failures. |
-| **[WiGLE](docs/guide.md#wigle)** | Test your credentials, review local GPS-tagged surveys, and choose which surveys to upload. |
-| **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for both dashboards. GPS, internet, and battery indicators use the Cardputer’s live status. |
+| **[WiGLE](docs/guide.md#wigle)** | Test your credentials, upload a saved GPS-tagged survey after Wardriving, or select a local survey later. |
+| **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto, Wardriving, and Attack. Dashboard indicators use the Cardputer’s live status. |
+| **[In-app updates](docs/installation.md#install-or-upgrade)** | Check GitHub for a newer release and install its verified Debian package from the main menu. |
 
 The **built-in Wi-Fi adapter** supports scanning and Wardriving on the stock driver. **Capture and deauth** require a USB adapter that supports monitor mode and, for deauth, injection. **GPS-tagged surveys** require a GNSS HAT with a position fix.
 
