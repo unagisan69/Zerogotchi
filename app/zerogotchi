@@ -2,6 +2,7 @@
 """Zerogotchi's native Cardputer Zero launcher UI."""
 
 import concurrent.futures
+import csv
 import fcntl
 import os
 import re
@@ -89,6 +90,52 @@ class Display:
             draw.text((15, y + 1), label, font=self.body, fill=TEAL if i == index else WHITE)
             y += 21
         draw.text((12, 151), footer, font=self.small, fill=MUTED)
+        self.paint(image)
+
+    def draw_auto(self, status, blink):
+        image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
+        resting = status.phase == "Idling"
+        face = "#96aeea" if resting else TEAL
+        draw.line((59, 44, 67, 33, 75, 33), fill=face, width=3)
+        draw.ellipse((73, 29, 81, 37), fill=face)
+        draw.rounded_rectangle((25, 44, 94, 92), radius=9, outline=face, width=3)
+        for x in (40, 72):
+            if resting or blink:
+                draw.line((x, 64, x + 7, 64), fill=face, width=2)
+            else:
+                draw.rectangle((x, 60, x + 6, 68), fill=face)
+        draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
+        draw.text((59, 110), "Z z" if resting else "ON AIR", font=self.small,
+                  anchor="mm", fill=face)
+        draw.text((123, 9), status.phase, font=self.title, fill=TEAL)
+        phase_detail = {"Idling": "Sweep complete", "Uploading": "Sending saved hashes"}
+        name = status.network or phase_detail.get(status.phase, "Looking for networks")
+        while draw.textlength(name, font=self.body) > 180:
+            name = name[:-2] + "…"
+        draw.text((124, 33), name, font=self.body, fill=WHITE)
+        draw.rounded_rectangle((124, 55, 306, 62), radius=3, fill=PANEL)
+        if status.total:
+            width = int(182 * status.attempted / status.total)
+            draw.rounded_rectangle((124, 55, 124 + width, 62), radius=3, fill=face)
+        progress = f"{status.attempted}/{status.total}"
+        label = f"{progress} networks visited" if resting else f"Target {progress}"
+        draw.text((124, 71), label, font=self.body, fill=WHITE)
+        draw.text((124, 91), f"{status.found} handshakes or PMKIDs", font=self.body, fill=WHITE)
+        if status.uploaded or status.queued or status.upload_failed:
+            draw.text((124, 111), f"{status.uploaded} sent  •  {status.queued} queued",
+                      font=self.small, fill=MUTED)
+        if status.skipped or status.failed or status.upload_failed:
+            errors = status.failed + status.upload_failed
+            y = 126 if status.uploaded or status.queued or status.upload_failed else 111
+            draw.text((124, y), f"{status.skipped} skipped  •  {errors} failed",
+                      font=self.small, fill=MUTED)
+        draw.line((12, 142, 308, 142), fill=PANEL)
+        draw.text((12, 150), "Esc Back" if resting else "Esc Stop sweep", font=self.small, fill=MUTED)
+        self.paint(image)
+
+    def paint(self, image):
         self.frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
             (red >> 3) << 11 | (green >> 2) << 5 | blue >> 3
             for red, green, blue in image.getdata()
@@ -120,6 +167,7 @@ class App:
         self.home()
 
     def screen(self, title, message="", items=(), back=None, footer=None):
+        self.auto_status = None
         self.title, self.message, self.items = title, message, items
         self.index, self.back, self.footer = 0, back, footer
         self.dirty = True
@@ -131,7 +179,42 @@ class App:
         ), back=self.exit)
 
     def auto(self):
-        self.screen("Auto", "Automatic Wi-Fi auditing is planned.", back=self.home)
+        self.screen("Auto", "Auto sends deauth frames on nearby networks. Use it only where you "
+                    "own every target. It visits each network once and then idles.",
+                    (("Start sweep", self.start_auto), ("Cancel", self.home)), back=self.home)
+
+    def start_auto(self):
+        adapter = wifi.read_setting("adapter")
+        if not adapter:
+            self.screen("Capture adapter required", "Set your USB Wi-Fi adapter in Settings.", back=self.auto)
+            return
+        auto_upload = bool(wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")))
+        if auto_upload:
+            self.screen("Auto uploads", "Auto will send any new WPA hashes to OnlineHashCrack. "
+                        "Read and accept the terms before proceeding.\n"
+                        "onlinehashcrack.com/terms-conditions.php",
+                        (("Agree and continue", lambda: self.auto_password(adapter, True, self.start_auto)),
+                         ("Cancel", self.auto)), self.auto)
+        else:
+            self.auto_password(adapter, False, self.auto)
+
+    def auto_password(self, adapter, auto_upload, back):
+        def authenticate(password):
+            self.work("Auto", "",
+                      lambda: wifi.auto_capture(adapter, password, self.cancel, self.report_capture,
+                                                auto_upload=auto_upload),
+                      self.auto_done, self.auto, cancellable=True)
+            self.auto_status = wifi.AutoStatus("Scanning")
+
+        self.edit("Cardputer user password", "Enter your Cardputer login password for this sweep.",
+                  re.compile(r"[ -~]{1,256}"), 256, authenticate, back, masked=True)
+
+    def auto_done(self, status):
+        if status.phase == "Stopped":
+            self.home()
+            return
+        self.screen("Auto", back=self.home)
+        self.auto_status = status
 
     def about(self):
         self.screen("About", "Zerogotchi is a Wi-Fi audit tool for Cardputer Zero. "
@@ -236,16 +319,42 @@ class App:
                     (("Accept and submit", lambda: self.send(path, back)),), back)
 
     def send(self, path, back):
+        def done(counts):
+            accepted, skipped, rejected = counts
+            self.screen("Submission result",
+                        f"Accepted {accepted}. Skipped {skipped}. Rejected {rejected}.", back=back)
         self.work("Submitting", "Sending WPA hashes to OnlineHashCrack…", lambda: wifi.upload(path),
-                  lambda summary: self.screen("Submission result", summary, back=back), back)
+                  done, back)
 
     def settings(self):
         is_set = bool(wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")))
         adapter = wifi.read_setting("adapter")
+        try:
+            exclusions = len(wifi.blacklist())
+        except wifi.WifiError:
+            exclusions = "invalid"
         self.screen("Settings", items=(
             (f"Capture adapter: {adapter or 'unset'}", self.adapter),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
+            (f"SSID blacklist: {exclusions}", self.edit_blacklist),
         ), back=self.home)
+
+    def edit_blacklist(self):
+        def open_editor(value):
+            self.edit("SSID blacklist", "Separate names with commas. Quote names containing commas.",
+                      re.compile(r"[^\r\n]*"), 1024, save, self.settings, initial=value, tail=True)
+
+        def save(value):
+            try:
+                wifi.parse_blacklist(value)
+            except csv.Error:
+                open_editor(value)
+                self.update_editor("Check commas and quotes.")
+                return
+            wifi.save_setting("ssid-blacklist", value)
+            self.settings()
+
+        open_editor(wifi.read_setting("ssid-blacklist"))
 
     def adapter(self):
         def save(value):
@@ -261,10 +370,10 @@ class App:
         self.edit("OnlineHashCrack key", "Enter your API key. Characters are hidden.",
                   wifi.KEY_PATTERN, 67, save, self.settings, masked=True)
 
-    def edit(self, title, prompt, pattern, limit, commit, back, *, initial="", masked=False):
+    def edit(self, title, prompt, pattern, limit, commit, back, *, initial="", masked=False, tail=False):
         self.editor = {
             "title": title, "prompt": prompt, "pattern": pattern, "limit": limit,
-            "commit": commit, "back": back, "value": initial, "masked": masked,
+            "commit": commit, "back": back, "value": initial, "masked": masked, "tail": tail,
         }
         self.update_editor()
 
@@ -272,6 +381,8 @@ class App:
         editor = self.editor
         value = editor["value"]
         field = f"•  {len(value)} characters" if editor["masked"] else (value or "▌")
+        if editor["tail"] and len(value) > 28:
+            field = "…" + value[-28:]
         self.screen(editor["title"], editor["prompt"] + "\n\n" + field + "\n" + feedback,
                     footer="Enter Save   /   Esc Cancel")
 
@@ -314,7 +425,10 @@ class App:
         if self.future:
             if self.cancellable and code == KEY_ESC:
                 self.cancel.set()
-                self.screen("Finishing capture", "Saving received packets…", footer="Please wait")
+                if self.auto_status:
+                    self.screen("Stopping Auto", "Finishing the current operation…", footer="Please wait")
+                else:
+                    self.screen("Finishing capture", "Saving received packets…", footer="Please wait")
         elif self.editor:
             self.edit_key(code)
         elif code == KEY_ESC and self.back:
@@ -329,6 +443,7 @@ class App:
         # Repaint through the initial framebuffer handoff from APPLaunch.
         repaint_until = time.monotonic() + 2.0
         last_paint = 0.0
+        last_blink = False
         try:
             while self.running:
                 if self.future and self.future.done():
@@ -341,10 +456,16 @@ class App:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
                 if self.future and self.cancellable and not self.cancel.is_set():
                     update = self.capture_update
-                    if update and update != self.message:
+                    if isinstance(update, wifi.AutoStatus) and update != self.auto_status:
+                        self.auto_status, self.dirty = update, True
+                    elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
                 now = time.monotonic()
-                if self.dirty:
+                blink = int(now * 5) % 18 == 0
+                if self.auto_status and (self.dirty or blink != last_blink):
+                    self.display.draw_auto(self.auto_status, blink)
+                    self.dirty, last_paint, last_blink = False, now, blink
+                elif self.dirty:
                     footer = self.footer
                     if footer is None:
                         footer = "F/X Move   /   Enter Select   /   Esc Back" if self.items else "Esc Back"

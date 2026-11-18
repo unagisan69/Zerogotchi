@@ -2,7 +2,6 @@
 
 Zerogotchi is a Wi-Fi audit app for the M5Stack Cardputer Zero stock launcher.
 Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go back.
-**Auto** is reserved for future automatic auditing.
 
 ## Install on the Cardputer Zero
 
@@ -10,12 +9,31 @@ From a checkout on the Cardputer, run:
 
 ```sh
 make package
-sudo apt install ./build/zerogotchi_0.3.0_all.deb
+sudo apt install ./build/zerogotchi_0.4.0_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
 `/usr/share/APPLaunch/applications/` and adds Zerogotchi to its carousel.
 See the [APPLaunch application model](https://github.com/CardputerZero/launcher/blob/master/docs/launcher-project-guide/04-application-model-and-launch-mechanism.md).
+
+## Auto and the SSID blacklist
+
+In **Settings → SSID blacklist**, enter comma-separated network names.
+Matching is case-sensitive. Quote names that contain commas. With a blacklist
+set, hidden networks are also excluded since their names cannot be checked.
+The exclusions apply to both Attack and Auto.
+
+Use **Auto** only where you own all the networks it can target. It scans once
+and visits each eligible BSSID in signal order, using Active Capture for up
+to 25 seconds per target or until it finds a usable handshake or PMKID.
+Auto skips hidden, open, and enterprise networks, and uses passive capture
+on 6 GHz. It asks for authorization and your Cardputer password before
+starting. With an OnlineHashCrack key configured, it also asks you to accept
+the service terms up front, then automatically submits new hash files and
+retries temporary connection failures while idling. Auto always saves results
+locally for review in **Saved captures**. It idles with the sweep totals until
+you press **Esc**. During a sweep, **Esc** stops after the current capture is
+closed and saved.
 
 ## Attack mode
 
