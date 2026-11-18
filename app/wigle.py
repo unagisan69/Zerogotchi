@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
 import uuid
 
 import wifi
@@ -82,9 +83,9 @@ def upload(path):
     return "WiGLE accepted the survey for processing."
 
 
-def rssi_by_bssid():
+def rssi_by_bssid(interface="wlan0"):
     try:
-        output = subprocess.check_output(["/usr/sbin/iw", "dev", "wlan0", "scan", "dump"],
+        output = subprocess.check_output(["/usr/sbin/iw", "dev", interface, "scan", "dump"],
                                          text=True, errors="replace", timeout=5)
     except (OSError, subprocess.SubprocessError) as error:
         raise wifi.WifiError("WiGLE could not read measured signal levels") from error
@@ -122,15 +123,7 @@ def capabilities(security):
     return "".join(labels.get(mode, "") for mode in modes) + "[ESS]"
 
 
-def record_survey(position, cancel):
-    if cancel.is_set() or position() is None:
-        return None
-    networks = wifi.scan(interface="wlan0")
-    signals = rssi_by_bssid()
-    fix = position()
-    if fix is None or cancel.is_set():
-        return None
-    now = datetime.now(timezone.utc)
+def survey_rows(networks, signals, fix, now):
     rows = []
     for network in networks:
         signal = signals.get((network.bssid, network.frequency))
@@ -140,8 +133,14 @@ def record_survey(position, cancel):
                          now.strftime("%Y-%m-%d %H:%M:%S"), band_channel, network.frequency, signal,
                          f"{fix.latitude:.7f}", f"{fix.longitude:.7f}", f"{fix.altitude:.1f}",
                          f"{fix.accuracy:.1f}", "", "", "WIFI"))
-    if not rows or cancel.is_set():
-        return None
+    return rows
+
+
+def append_survey(path, rows, now):
+    if path is not None:
+        with path.open("a", encoding="utf-8", newline="") as output:
+            csv.writer(output).writerows(rows)
+        return path
     SURVEYS.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=SURVEYS,
                                      prefix=".survey-", delete=False) as output:
@@ -153,8 +152,63 @@ def record_survey(position, cancel):
             writer.writerows(rows)
             output.flush()
             destination = SURVEYS / f"survey-{now:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}.csv"
-            if not cancel.is_set():
-                os.replace(temporary, destination)
-                return destination
+            os.replace(temporary, destination)
+            return destination
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def record_survey(position, cancel):
+    if cancel.is_set() or position() is None:
+        return None
+    networks = wifi.scan(interface="wlan0")
+    signals = rssi_by_bssid()
+    fix = position()
+    if fix is None or cancel.is_set():
+        return None
+    now = datetime.now(timezone.utc)
+    rows = survey_rows(networks, signals, fix, now)
+    if rows and not cancel.is_set():
+        return append_survey(None, rows, now)
+    return None
+
+
+@dataclass(frozen=True)
+class WardriveStatus:
+    phase: str
+    scans: int = 0
+    networks: int = 0
+    observations: int = 0
+    error: str = ""
+
+
+def wardrive(interface, position, cancel, report, *, interval=12):
+    if not (Path("/sys/class/net") / interface / "wireless").exists() and not (
+        Path("/sys/class/net") / interface / "phy80211"
+    ).exists():
+        raise wifi.WifiError(f"WiFi adapter {interface} is unavailable")
+    seen = set()
+    scans = observations = 0
+    survey = None
+    while not cancel.is_set():
+        report(WardriveStatus("Scanning", scans, len(seen), observations))
+        error = ""
+        try:
+            networks = wifi.scan(interface=interface)
+            scans += 1
+            seen.update(network.bssid for network in networks)
+            if position() is not None and not cancel.is_set():
+                signals = rssi_by_bssid(interface)
+                fix = position()
+                if fix is not None and not cancel.is_set():
+                    now = datetime.now(timezone.utc)
+                    rows = survey_rows(networks, signals, fix, now)
+                    if rows:
+                        survey = append_survey(survey, rows, now)
+                        observations += len(rows)
+        except wifi.WifiError as failure:
+            error = str(failure)
+        phase = "Retrying" if error else "Listening" if position() else "Locating"
+        report(WardriveStatus(phase, scans, len(seen), observations, error))
+        cancel.wait(interval)
+    return WardriveStatus("Stopped", scans, len(seen), observations)

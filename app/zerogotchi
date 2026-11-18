@@ -36,8 +36,11 @@ KEYS = {
 }
 SHIFTED = dict(zip("1234567890-=;',./[]`", "!@#$%^&*()_+:\"<>?{}~"))
 USB_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}")
-THEMES = {"acidburn": "Acidburn", "computer": "Computer"}
-LISTENING_FRAMES = ("angry", "angry_storm_1", "angry_storm_2")
+THEMES = {"acidburn": "Acidburn", "computer": "Computer", "zero-cool": "Zero Cool"}
+LISTENING_FRAMES = {
+    "acidburn": ("angry", "angry_storm_1", "angry_storm_2"),
+    "zero-cool": ("angry_1", "angry_2", "angry_3"),
+}
 ACIDBURN_MOODS = {
     "Checking": "happy",
     "Deauthing": "angry",
@@ -50,9 +53,15 @@ ACIDBURN_MOODS = {
 }
 
 
-@lru_cache(maxsize=8)
-def acidburn_face(mood):
-    path = Path(__file__).resolve().parent / "themes" / "acidburn" / f"{mood}.png"
+ZERO_COOL_MOODS = {
+    **ACIDBURN_MOODS, "Deauthing": "angry_1", "Checking": "bored",
+    "Uploading": "excited", "Locating": "surprised",
+}
+
+
+@lru_cache(maxsize=18)
+def theme_face(theme, mood):
+    path = Path(__file__).resolve().parent / "themes" / theme / f"{mood}.png"
     with Image.open(path) as source:
         icon = source.convert("RGB").resize((90, 90), Image.Resampling.LANCZOS)
     mask = Image.new("L", icon.size)
@@ -145,7 +154,7 @@ class Display:
         else:
             draw.line((50, 75, 55, 79, 63, 79, 68, 75), fill=face, width=2)
 
-    def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn", listening_frame=0):
+    def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn", listening_frame=0, location=None):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
@@ -153,11 +162,12 @@ class Display:
         resting = phase == "Idling"
         face = TEAL
         caption_y = 110
-        if theme == "acidburn":
+        if theme in LISTENING_FRAMES:
             try:
-                mood = (LISTENING_FRAMES[listening_frame] if phase == "Listening"
-                        else ACIDBURN_MOODS.get(phase, "neutral"))
-                icon, mask = acidburn_face(mood)
+                moods = ZERO_COOL_MOODS if theme == "zero-cool" else ACIDBURN_MOODS
+                mood = (LISTENING_FRAMES[theme][listening_frame] if phase == "Listening"
+                        else moods.get(phase, "neutral"))
+                icon, mask = theme_face(theme, mood)
                 image.paste(icon, (15, 16), mask)
                 caption_y = 116
             except OSError:
@@ -167,50 +177,68 @@ class Display:
         draw.text((59, caption_y), "Z z" if resting else "ON AIR", font=self.small,
                   anchor="mm", fill=face)
         draw.text((123, 9), phase, font=self.title, fill=TEAL)
-        phase_detail = {"Idling": "Sweep complete", "Uploading": "Sending saved hashes"}
-        name = status.network or phase_detail.get(status.phase, "Looking for networks")
-        while draw.textlength(name, font=self.body) > 180:
-            name = name[:-2] + "…"
-        draw.text((124, 33), name, font=self.body, fill=WHITE)
-        draw.rounded_rectangle((124, 55, 306, 62), radius=3, fill=PANEL)
-        if status.total:
-            width = int(182 * status.attempted / status.total)
-            draw.rounded_rectangle((124, 55, 124 + width, 62), radius=3, fill=face)
-        progress = f"{status.attempted}/{status.total}"
-        label = f"{progress} networks visited" if resting else f"Target {progress}"
-        draw.text((124, 71), label, font=self.body, fill=WHITE)
-        draw.text((124, 91), f"{status.found} handshakes", font=self.body, fill=WHITE)
-        draw.text((124, 109), f"{status.deauths} deauth bursts", font=self.small, fill=MUTED)
-        if status.skipped or status.failed or status.upload_failed:
-            errors = status.failed + status.upload_failed
-            draw.text((124, 125), f"{status.skipped} skipped  •  {errors} failed",
-                      font=self.small, fill=MUTED)
-        elif status.uploaded or status.queued:
-            draw.text((124, 125), f"{status.uploaded} uploaded  •  {status.queued} queued",
-                      font=self.small, fill=MUTED)
+        if isinstance(status, wigle.WardriveStatus):
+            self.draw_wardrive_stats(draw, status, location)
+        else:
+            phase_detail = {"Idling": "Sweep complete", "Uploading": "Sending saved hashes"}
+            name = status.network or phase_detail.get(status.phase, "Looking for networks")
+            while draw.textlength(name, font=self.body) > 180:
+                name = name[:-2] + "…"
+            draw.text((124, 33), name, font=self.body, fill=WHITE)
+            draw.rounded_rectangle((124, 55, 306, 62), radius=3, fill=PANEL)
+            if status.total:
+                width = int(182 * status.attempted / status.total)
+                draw.rounded_rectangle((124, 55, 124 + width, 62), radius=3, fill=face)
+            progress = f"{status.attempted}/{status.total}"
+            label = f"{progress} networks visited" if resting else f"Target {progress}"
+            draw.text((124, 71), label, font=self.body, fill=WHITE)
+            draw.text((124, 91), f"{status.found} handshakes", font=self.body, fill=WHITE)
+            draw.text((124, 109), f"{status.deauths} deauth bursts", font=self.small, fill=MUTED)
+            if status.skipped or status.failed or status.upload_failed:
+                errors = status.failed + status.upload_failed
+                draw.text((124, 125), f"{status.skipped} skipped  •  {errors} failed",
+                          font=self.small, fill=MUTED)
+            elif status.uploaded or status.queued:
+                draw.text((124, 125), f"{status.uploaded} uploaded  •  {status.queued} queued",
+                          font=self.small, fill=MUTED)
         draw.line((12, 142, 308, 142), fill=PANEL)
         draw.text((12, 150), "Esc Back" if resting else "Esc to stop", font=self.small, fill=MUTED)
         gps_color = TEAL if gps_on else MUTED
         net_color = TEAL if online else MUTED
-        # Angled solar panels and a radio beam distinguish the satellite from the globe.
-        draw.polygon(((220, 151), (225, 146), (229, 150), (224, 155)), fill=gps_color)
-        draw.polygon(((231, 162), (236, 157), (240, 161), (235, 166)), fill=gps_color)
-        draw.polygon(((224, 157), (231, 150), (236, 155), (229, 162)), outline=gps_color)
-        draw.arc((234, 144, 242, 152), 270, 360, fill=gps_color)
-        draw.arc((235, 141, 246, 153), 273, 355, fill=gps_color)
-        draw.ellipse((254, 149, 268, 163), outline=net_color)
-        draw.ellipse((259, 149, 263, 163), outline=net_color)
-        draw.line((255, 156, 267, 156), fill=net_color)
+        # All three symbols occupy the same 14-pixel band.
+        draw.polygon(((226, 152), (229, 149), (232, 152), (229, 155)), fill=gps_color)
+        draw.polygon(((234, 159), (237, 156), (240, 159), (237, 162)), fill=gps_color)
+        draw.polygon(((229, 157), (234, 152), (237, 155), (232, 160)), outline=gps_color)
+        draw.arc((236, 149, 243, 156), 270, 360, fill=gps_color)
+        draw.ellipse((254, 149, 267, 162), outline=net_color)
+        draw.ellipse((259, 149, 262, 162), outline=net_color)
+        draw.line((255, 155, 266, 155), fill=net_color)
         if not gps_on:
-            draw.line((220, 146, 242, 165), fill="#e5a183", width=1)
+            draw.line((226, 149, 242, 162), fill="#e5a183")
         if not online:
-            draw.line((254, 149, 268, 163), fill="#e5a183", width=1)
+            draw.line((254, 149, 267, 162), fill="#e5a183")
         color = MUTED if battery is None else "#ff9c73" if battery < 20 else TEAL
-        draw.rectangle((281, 150, 303, 162), outline=color)
+        draw.rectangle((281, 149, 303, 162), outline=color)
         draw.rectangle((304, 154, 306, 158), fill=color)
         if battery:
             draw.rectangle((283, 152, 282 + max(1, int(battery * .19)), 160), fill=color)
         self.paint(image)
+
+    def draw_wardrive_stats(self, draw, status, location):
+        draw.text((124, 32), "Wardriving", font=self.small, fill=MUTED)
+        draw.text((124, 49), f"{status.networks} networks  •  {status.scans} scans",
+                  font=self.body, fill=WHITE)
+        draw.text((124, 66), f"{status.observations} GPS observations", font=self.body, fill=WHITE)
+        if location:
+            latitude, longitude, accuracy, current = location
+            draw.text((124, 87), "GPS fix" if current else "Last GPS fix", font=self.small, fill=TEAL)
+            draw.text((124, 102), f"{latitude}, {longitude}", font=self.body, fill=WHITE)
+            if not status.error:
+                draw.text((124, 121), f"Accuracy ~{accuracy} m", font=self.small, fill=MUTED)
+        else:
+            draw.text((124, 99), "Waiting for GPS fix", font=self.body, fill=MUTED)
+        if status.error:
+            draw.text((124, 121), "Scan unavailable; retrying", font=self.small, fill=MUTED)
 
     def paint(self, image):
         self.frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
@@ -243,6 +271,7 @@ class App:
         self.editor = None
         self.gnss = None
         self.gps_on = False
+        self.wardrive_location = None
         self.online = False
         self.battery = None
         self.connectivity = None
@@ -263,7 +292,8 @@ class App:
 
     def home(self):
         self.screen("Zerogotchi", items=(
-            ("Auto", self.auto), ("Attack", self.disclaimer), ("About", self.about),
+            ("Auto", self.auto), ("Wardriving", self.wardriving), ("Attack", self.disclaimer),
+            ("About", self.about),
             ("Settings", self.settings), ("Exit", self.exit),
         ), back=self.exit)
 
@@ -271,6 +301,34 @@ class App:
         self.screen("Auto", "Auto sends deauth frames on nearby networks. Use it only where you "
                     "own every target. It visits each network once and then idles.",
                     (("Start sweep", self.start_auto), ("Session log", self.auto_log)), back=self.home)
+
+    def wardriving(self):
+        self.screen("Wardriving", "Scan for nearby networks and save GPS-tagged observations locally.",
+                    (("Start", self.start_wardriving), ("Saved surveys", self.wigle_surveys)),
+                    back=self.home)
+
+    def start_wardriving(self):
+        adapter = wifi.read_setting("wardriving-adapter") or "wlan0"
+
+        def authenticate(password):
+            monitor = gnss.GnssMonitor(wifi.HELPER, password)
+            self.gnss = monitor
+            self.wardrive_location = None
+            self.work("Wardriving", "",
+                      lambda: wigle.wardrive(adapter, lambda: monitor.position(time.monotonic()),
+                                             self.cancel, self.report_capture),
+                      self.wardrive_done, self.wardriving, cancellable=True)
+            self.auto_status = wigle.WardriveStatus("Scanning")
+
+        self.edit("Cardputer user password", "Enter your Cardputer login password to power GPS.",
+                  re.compile(r"[ -~]{1,256}"), 256, authenticate, self.wardriving, masked=True)
+
+    def wardrive_done(self, status):
+        self.screen("Wardriving stopped",
+                    f"{status.networks} networks seen in {status.scans} scans. "
+                    f"{status.observations} GPS observations saved.",
+                    (("Saved surveys", self.wigle_surveys),) if status.observations else (),
+                    back=self.wardriving)
 
     def auto_log(self):
         try:
@@ -464,6 +522,7 @@ class App:
             exclusions = "invalid"
         self.screen("Settings", items=(
             (f"Theme: {THEMES[self.theme]}", self.select_theme),
+            (f"Wardriving Adapter: {wifi.read_setting('wardriving-adapter') or 'Built-in'}", self.wardrive_adapter),
             (f"WiFi Adapter: {'Built-in' if adapter == 'wlan0' else adapter or 'unset'}", self.adapter),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
             (f"SSID blacklist: {exclusions}", self.edit_blacklist),
@@ -539,23 +598,29 @@ class App:
         open_editor(wifi.read_setting("ssid-blacklist"))
 
     def adapter(self):
-        self.screen("WiFi Adapter", items=(
-            ("Built-in (wlan0) · scan only", lambda: self.save_adapter("wlan0")),
-            ("wlan1", lambda: self.save_adapter("wlan1")),
-            ("Custom…", self.custom_adapter),
-        ), back=self.settings)
+        self.adapter_menu("WiFi Adapter", "adapter")
 
-    def save_adapter(self, value):
-        try:
-            wifi.save_setting("adapter", value)
-        except OSError:
-            self.screen("Could not save adapter", back=self.adapter)
-            return
-        self.settings()
+    def wardrive_adapter(self):
+        self.adapter_menu("Wardriving Adapter", "wardriving-adapter")
 
-    def custom_adapter(self):
-        self.edit("Custom WiFi adapter", "Enter the interface name of a dedicated USB WiFi adapter.",
-                  USB_NAME, 15, self.save_adapter, self.adapter, initial=wifi.read_setting("adapter"))
+    def adapter_menu(self, title, setting):
+        def select(value):
+            try:
+                wifi.save_setting(setting, value)
+            except OSError:
+                self.screen("Could not save adapter", back=lambda: self.adapter_menu(title, setting))
+                return
+            self.settings()
+
+        def custom():
+            self.edit(title, "Enter the Linux WiFi interface name.",
+                      USB_NAME, 15, select, lambda: self.adapter_menu(title, setting),
+                      initial=wifi.read_setting(setting))
+
+        builtin = "Built-in (wlan0) · scan only" if setting == "adapter" else "Built-in (wlan0)"
+        self.screen(title, items=((builtin, lambda: select("wlan0")),
+                                  ("wlan1", lambda: select("wlan1")),
+                                  ("Custom…", custom)), back=self.settings)
 
     def api_key(self):
         def save(value):
@@ -619,7 +684,9 @@ class App:
         if self.future:
             if self.cancellable and code == KEY_ESC:
                 self.cancel.set()
-                if self.auto_status:
+                if isinstance(self.auto_status, wigle.WardriveStatus):
+                    self.screen("Stopping Wardriving", "Finishing the current scan…", footer="Please wait")
+                elif self.auto_status:
                     self.screen("Stopping Auto", "Finishing the current operation…", footer="Please wait")
                 else:
                     self.screen("Finishing capture", "Saving received packets…", footer="Please wait")
@@ -707,7 +774,7 @@ class App:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
                 if self.future and self.cancellable and not self.cancel.is_set():
                     update = self.capture_update
-                    if isinstance(update, wifi.AutoStatus) and update != self.auto_status:
+                    if isinstance(update, (wifi.AutoStatus, wigle.WardriveStatus)) and update != self.auto_status:
                         self.auto_status, self.dirty = update, True
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
@@ -722,18 +789,28 @@ class App:
                         self.gps_on, self.dirty = gps_on, True
                 blink = self.theme == "computer" and int(now * 5) % 18 == 0
                 listening_frame = 0
-                if self.theme == "acidburn" and self.auto_status and self.auto_status.phase == "Listening":
+                if self.theme in LISTENING_FRAMES and self.auto_status and self.auto_status.phase == "Listening":
                     if listening_since is None:
                         listening_since = now
-                    listening_frame = int((now - listening_since) * 3) % len(LISTENING_FRAMES)
+                    listening_frame = int((now - listening_since) * 3) % len(LISTENING_FRAMES[self.theme])
                 else:
                     listening_since = None
                 if self.auto_status:
                     self.poll_device_status(now)
-                    self.poll_survey(now)
+                    if isinstance(self.auto_status, wigle.WardriveStatus):
+                        fix = self.gnss.position(now) if self.gnss else None
+                        location = self.wardrive_location
+                        if fix:
+                            location = (f"{fix.latitude:.6f}", f"{fix.longitude:.6f}", round(fix.accuracy), True)
+                        elif location:
+                            location = (*location[:3], False)
+                        if location != self.wardrive_location:
+                            self.wardrive_location, self.dirty = location, True
+                    else:
+                        self.poll_survey(now)
                 if self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
                     self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,
-                                           self.battery, self.theme, listening_frame)
+                                           self.battery, self.theme, listening_frame, self.wardrive_location)
                     last_listening_frame = listening_frame
                     self.dirty, last_paint, last_blink = False, now, blink
                 elif self.dirty:

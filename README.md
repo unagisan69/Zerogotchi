@@ -15,7 +15,7 @@ sudo apt install -y git make dpkg-dev python3 python3-pil fonts-dejavu-core \
 git clone https://github.com/unagisan69/Zerogotchi.git
 cd Zerogotchi
 make package
-sudo apt install ./build/zerogotchi_0.4.6_all.deb
+sudo apt install ./build/zerogotchi_0.4.7_all.deb
 ```
 
 The stock launcher detects the package's desktop entry in
@@ -55,8 +55,20 @@ whether NetworkManager's internet check passes, and the battery icon shows the
 stock gauge's charge percentage. Auto restores the external 5 V rail when you
 leave if it powered the rail on.
 
-**Settings → Theme** switches the Auto dashboard face between **Acidburn**
-(the default illustrated theme) and **Computer** (the original animated face).
+**Settings → Theme** switches the Auto and Wardriving dashboard faces between
+**Acidburn** (the default), **Computer**, and **Zero Cool**.
+
+## Wardriving
+
+Choose **Wardriving → Start** to scan repeatedly and see unique networks,
+scan counts, GPS observations, and the latest position fix. **Settings →
+Wardriving Adapter** defaults to the built-in Wi-Fi interface (`wlan0`) and
+is independent of the Auto and Attack adapter setting.
+
+Wardriving uses NetworkManager scans and respects the SSID blacklist. After
+a fresh GPS fix, each scan adds observations with measured signal levels to a
+local WiGLE CSV for the session. Press **Esc** to stop. You can review and
+manually upload the CSV under **Wardriving → Saved surveys**.
 
 **Auto → Session log** shows the latest sweep's decisions and results. The file
 at `${XDG_DATA_HOME:-~/.local/share}/zerogotchi/auto-session.log` is replaced
