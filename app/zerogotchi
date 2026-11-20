@@ -8,6 +8,9 @@ from dataclasses import replace
 import fcntl
 from functools import lru_cache
 import os
+import json
+import signal
+import sys
 from pathlib import Path
 import re
 import select
@@ -336,8 +339,20 @@ class App:
         self.next_survey = 0
         self.survey_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.running = True
+        self.restart_requested = False
         self.shift = set()
+        self.startup_release = None
+        self.startup_process = None
         self.home()
+        try:
+            self.startup_process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).with_name("updater.py")), "--startup-check"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            pass
+        self.startup_deadline = time.monotonic() + 7
 
     def screen(self, title, message="", items=(), back=None, footer=None):
         self.auto_status = None
@@ -547,7 +562,38 @@ class App:
                     "Wardriving logs Wi-Fi and Bluetooth LE with GPS. Meshmapping listens for LoRa nodes. Supports WiGLE, WDG Wars, OnlineHashCrack, and face themes.",
                     back=self.home)
 
+    def stop_startup_check(self):
+        process, self.startup_process = self.startup_process, None
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.communicate()
+
+    def poll_startup_update(self, now):
+        process = self.startup_process
+        if process is not None:
+            if process.poll() is not None:
+                output, _ = process.communicate()
+                self.startup_process = None
+                try:
+                    release = updater.Release(**json.loads(output))
+                    if release.available:
+                        self.startup_release = release
+                except (TypeError, ValueError):
+                    pass
+            elif now >= self.startup_deadline:
+                self.stop_startup_check()
+        if (self.startup_release is not None and self.title == "Zerogotchi"
+                and not self.future and not self.editor and self.auto_status is None):
+            release, self.startup_release = self.startup_release, None
+            self.update_available(release)
+
     def update(self):
+        self.stop_startup_check()
+        self.startup_release = None
         self.work("Update", "Checking the latest GitHub release…", updater.check, self.update_available, self.home)
 
     def update_available(self, release):
@@ -555,20 +601,21 @@ class App:
             self.screen("Up to date", f"Installed version: {release.current}", back=self.home)
             return
         self.screen("Update available", f"Installed: {release.current}\nGitHub: {release.latest}",
-                    (("Install update", lambda: self.update_password(release)), ("Cancel", self.home)),
+                    (("Update", lambda: self.update_password(release)), ("Later", self.home)),
                     back=self.home)
 
     def update_password(self, release):
         def install(password):
-            self.work("Updating", "Downloading, verifying, and installing the release…",
-                      lambda: updater.install(release, password),
-                      lambda _: self.screen("Update installed",
-                                            f"Version {release.latest} is ready. Reopen from the launcher.",
-                                            (("Exit to launcher", self.exit),), back=self.exit),
-                      self.update)
+            self.work("Updating", "Preparing the update…",
+                      lambda: updater.install(release, password, self.report_capture),
+                      lambda _: self.restart(), self.update)
         self.edit("Cardputer user password", "Enter your Cardputer login password to install the update.",
                   re.compile(r"[ -~]{1,256}"), 256, install,
                   lambda: self.update_available(release), masked=True)
+
+    def restart(self):
+        self.restart_requested = True
+        self.running = False
 
     def exit(self):
         self.running = False
@@ -745,21 +792,36 @@ class App:
         self.settings()
 
     def wigle_settings(self):
-        self.screen("WiGLE", items=(
+        pair = wigle.credentials()
+        message = f"API credentials saved.\nAPI Name: {pair[0]}" if pair else "API credentials not configured."
+        self.screen("WiGLE", message, items=(
             ("Set API credentials", self.wigle_credentials),
             ("Test credentials", lambda: self.wigle_request(wigle.test_profile)),
             ("Saved surveys", self.wigle_surveys),
         ), back=self.settings)
 
     def wigle_credentials(self):
+        pair = wigle.credentials()
+
         def token(name):
             def save(value):
                 wigle.save_credentials(name, value)
-                self.wigle_settings()
-            self.edit("WiGLE API token", "Enter your API token. Characters are hidden.",
-                      wigle.CREDENTIAL, 128, save, self.wigle_settings, masked=True)
-        self.edit("WiGLE API name", "Enter your API name.",
-                  wigle.CREDENTIAL, 128, token, self.wigle_settings, masked=True)
+                self.work("WiGLE saved", "Credentials saved. Checking WiGLE account access…",
+                          wigle.check_saved_credentials,
+                          lambda result: self.screen("WiGLE saved", result, back=self.wigle_settings),
+                          self.wigle_settings)
+
+            self.edit("WiGLE API Token (2/2)", "Enter API Token from wigle.net/account. Case-sensitive.",
+                      wigle.CREDENTIAL, 128, save,
+                      lambda: name_editor(name), masked=True,
+                      initial=pair[1] if pair else "", cancel_label="Back")
+
+        def name_editor(value):
+            self.edit("WiGLE API Name (1/2)", "Enter API Name from wigle.net/account. Case-sensitive.",
+                      wigle.CREDENTIAL, 128, token, self.wigle_settings, initial=value, tail=True,
+                      submit_label="Next", cancel_label="Cancel")
+
+        name_editor(pair[0] if pair else "")
 
     def wigle_surveys(self, back=None):
         paths = wigle.surveys()
@@ -925,10 +987,12 @@ class App:
         self.edit("OnlineHashCrack key", "Enter your API key. Characters are hidden.",
                   wifi.KEY_PATTERN, 67, save, self.settings, masked=True)
 
-    def edit(self, title, prompt, pattern, limit, commit, back, *, initial="", masked=False, tail=False):
+    def edit(self, title, prompt, pattern, limit, commit, back, *, initial="", masked=False, tail=False,
+             submit_label="Save", cancel_label="Cancel"):
         self.editor = {
             "title": title, "prompt": prompt, "pattern": pattern, "limit": limit,
             "commit": commit, "back": back, "value": initial, "masked": masked, "tail": tail,
+            "submit_label": submit_label, "cancel_label": cancel_label,
         }
         self.update_editor()
 
@@ -939,7 +1003,7 @@ class App:
         if editor["tail"] and len(value) > 28:
             field = "…" + value[-28:]
         self.screen(editor["title"], editor["prompt"] + "\n\n" + field + "\n" + feedback,
-                    footer="Enter Save   /   Esc Cancel")
+                    footer=f"Enter {editor['submit_label']}   /   Esc {editor['cancel_label']}")
 
     def edit_key(self, key):
         editor = self.editor
@@ -1082,13 +1146,14 @@ class App:
                         self.screen("Zerogotchi", str(error), back=self.failed)
                     except OSError:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
-                if self.future and self.cancellable and not self.cancel.is_set():
+                if self.future and not self.cancel.is_set():
                     update = self.capture_update
                     if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus, meshmapping.Status)) and update != self.auto_status:
                         self.auto_status, self.dirty = update, True
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
                 now = time.monotonic()
+                self.poll_startup_update(now)
                 if self.gnss:
                     if not self.auto_status:
                         self.survey_cancel.set()
@@ -1147,6 +1212,7 @@ class App:
                     if kind == 1:
                         self.key(code, state)
         finally:
+            self.stop_startup_check()
             self.cancel.set()
             self.survey_cancel.set()
             self.survey_executor.shutdown(wait=False, cancel_futures=True)
@@ -1165,4 +1231,7 @@ if __name__ == "__main__":
         open("/dev/input/cardputer-zero-internal", "rb", buffering=0) as keyboard,
         concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor,
     ):
-        App(Display(lcd), keyboard, executor).run()
+        app = App(Display(lcd), keyboard, executor)
+        app.run()
+    if app.restart_requested:
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])

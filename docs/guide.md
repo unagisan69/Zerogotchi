@@ -175,8 +175,14 @@ estimates. Allow extra radius at the edge of an area you want to protect.
 
 ## Survey uploads
 
-In **Settings → WiGLE**, save the API name and token and select **Test
-credentials** to verify account access. With credentials configured, Auto can
+In **Settings → WiGLE → Set API credentials**, enter the **API Name** from
+your [WiGLE account page](https://wigle.net/account) and press **Enter Next**.
+Then enter the **API Token** and press **Enter Save**. Both values are
+case-sensitive. Use the API credentials shown on that account page instead
+of your website login. The app confirms that the pair was saved and checks
+account access automatically. If offline, connect to the internet and choose
+**Test credentials** later. Esc on the token screen returns to the name step.
+Saved credentials remain available when reopening the app. With credentials configured, Auto can
 save one local survey after a fresh GPS fix. Wardriving saves local observations
 regardless of whether credentials are configured.
 

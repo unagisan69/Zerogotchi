@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.18
+tag=v0.4.19
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt
@@ -97,3 +97,11 @@ Use AppBuilder's `scripts/pack-deb.sh` path for this project. The generic
 **Build DEB Package** workflow targets SCons projects and its packer produces
 a different package layout. The root `app-builder.json` supplies listing metadata to `czdev publish`.
 First releases require a video of the app running on the device and maintainer review.
+
+
+On launch, Zerogotchi checks for a newer stable GitHub release in the background.
+Choose **Update** (selected by default) or **Later**. Offline checks end quietly.
+The main-menu **Update** option also runs a check. Installation shows download
+progress, verification, and package installation progress, then restarts the app.
+Enter your Cardputer user password when prompted. Credentials and app data stay
+in your user directory.

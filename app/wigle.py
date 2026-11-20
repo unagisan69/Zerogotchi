@@ -63,6 +63,8 @@ def request(path, survey=None):
     if response.returncode:
         raise wifi.WifiError("WiGLE connection failed")
     payload, _, code = response.stdout.rpartition("\n")
+    if code in ("401", "403"):
+        raise wifi.WifiError("WiGLE rejected the API credentials. Check API Name and API Token, including letter case.")
     if not code.isdecimal() or not 200 <= int(code) < 300:
         raise wifi.WifiError(f"WiGLE returned HTTP {code}" if code.isdecimal()
                              else "WiGLE returned an unreadable response")
@@ -77,6 +79,16 @@ def request(path, survey=None):
 def test_profile():
     request("/profile/user")
     return "WiGLE credentials verified."
+
+
+def check_saved_credentials():
+    try:
+        test_profile()
+    except wifi.WifiError as error:
+        if str(error) == "WiGLE connection failed":
+            return "Credentials saved locally. Connect to the internet, then select Test credentials to verify them."
+        return f"Credentials saved locally.\n{error}"
+    return "Credentials saved and verified with WiGLE."
 
 
 def surveys():

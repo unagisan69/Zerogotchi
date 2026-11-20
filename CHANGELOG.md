@@ -10,6 +10,12 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.19](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.19)
+
+- Clarified WiGLE credential setup with numbered steps, a Next action, a visible API Name, saved status, and automatic account verification.
+- Added a quiet background update check on launch, with Update selected by default.
+- Updates show download and installation progress and restart the app after installation, following meshcore-zero's update flow.
+
 ## [0.4.18](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.18)
 
 - Use the canonical 16-character MeshCore ID for WDG Wars and show merge and rejection details.
