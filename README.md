@@ -45,6 +45,7 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | **[Saved captures](docs/guide.md#saved-captures)** | Review captures by network name. Keeps PCAPs and target-filtered Hashcat mode 22000 files. Includes a confirmed **Clear all handshakes** action. |
 | **[Wardriving](docs/guide.md#wardriving)** | Scans Wi-Fi and Bluetooth LE concurrently, shows detections and new addresses separately, and saves new GPS-tagged observations to a local CSV. Press **P** to pause or resume. |
 | **[Meshmapping](docs/guide.md#meshmapping)** | Listen for MeshCore advertisements with the SX1262 LoRa cap. See unique nodes and GPS status, save GPS-tagged sightings, and optionally send mapped nodes to WDG Wars. |
+| **[Sub-Ghz Monitor](docs/guide.md#sub-ghz-monitor)** | Monitor CC1101 signal strength with a live graph, threshold events, frequency presets, and documented hat profiles. |
 | **[OnlineHashCrack](docs/guide.md#onlinehashcrack)** | Submit WPA hashes from Saved captures, or let Auto send new results after upfront consent. Auto retries temporary connection failures. |
 | **[Lifetime Results](docs/guide.md#lifetime-results)** | View Auto and Manual capture counts and success rates, plus Wardriving discovery totals. Reset counters from the dashboard. |
 | **[SSID allow list](docs/guide.md#settings-and-dashboard)** | Limit Auto and Wardriving Wi-Fi discovery to specific network names. |

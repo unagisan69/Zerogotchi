@@ -10,6 +10,11 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.21](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.21)
+
+- Added **Sub-Ghz → Monitor** with live CC1101 RSSI history, peak signal level, threshold events, pause/resume, and frequency presets/custom tuning.
+- Added documented profiles for Kasiin RF 2in1 v1/v2, Pingequa dual-radio boards, and M5Stack Cap CC1101. RF 2in1 v1 was hardware-tested on zero2.
+
 ## [0.4.20](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.20)
 
 - Added Diagnostics for radio interfaces, GPS, connectivity, storage, tools, and configuration.

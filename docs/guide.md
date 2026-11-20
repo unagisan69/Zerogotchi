@@ -4,7 +4,7 @@
 
 [Auto WiFi Attack](#auto-wifi-attack) · [Manual WiFi Attack](#manual-wifi-attack) · [Saved captures](#saved-captures) ·
 [Upload queue](#upload-queue) · [Diagnostics](#diagnostics) ·
-[Wardriving](#wardriving) · [Meshmapping](#meshmapping) · [Settings](#settings-and-dashboard) ·
+[Sub-Ghz](#sub-ghz-monitor) · [Wardriving](#wardriving) · [Meshmapping](#meshmapping) · [Settings](#settings-and-dashboard) ·
 [OnlineHashCrack](#onlinehashcrack) · [Private Zones](#private-zones) · [Survey uploads](#survey-uploads)
 
 Use **F/X** or the arrow keys to move, **Enter** to select, and **Esc** to go
@@ -112,6 +112,49 @@ received advertisement without coordinates, the receiver's GPS fix marks
 the reception location. Forwarded advertisements without node coordinates
 stay in the local survey. Private Zones pause listening and are checked
 again before upload.
+
+## Sub-Ghz Monitor
+
+1. Open **Sub-Ghz → Hat** and choose the attached CC1101 board.
+   For the switch-selected Kasiin RF 2in1, select **Kasiin RF 2in1 v1** and
+   move its physical switch to **CC1101**.
+2. Choose **Frequency**. Presets are 315, 433.92, 868, and 915 MHz. **Custom**
+   accepts 300–348, 387–464, or 779–928 MHz. Use an antenna suited to the band.
+3. Set the **Threshold**, then select **Monitor**. The screen plots recent RSSI
+   and shows current signal strength, peak level, elapsed time, and threshold
+   events. An event begins when RSSI crosses the threshold. A 3 dB hysteresis
+   reduces repeated counts near that threshold.
+4. Press **P** to pause/resume or **Esc** to stop. Display sleep follows DarkTime.
+
+This mode receives continuously on one selected frequency with approximately
+271 kHz filter bandwidth. RSSI is an estimated signal level. Events represent
+energy above the threshold. The mode provides no protocol decoding or recording.
+
+### CC1101 hat profiles
+
+These are **Cardputer Zero GPIO numbers**, translated through the EXT header.
+The host uses SPI0 SCLK=11, MOSI=10, and MISO=9.
+
+| Profile | CC1101 CS | Other controls | Verification |
+| --- | --- | --- | --- |
+| Kasiin RF 2in1 v1 | GPIO22, software CS | GDO0=23; physical CC1101/NRF24 switch | Tested on zero2 with CC1101 version 0x14 |
+| Kasiin RF 2in1 v2 | GPIO15, software CS | GDO0=7; NRF24 CS=22 held high and CE=23 held low | Documented pinout, hardware test pending |
+| Pingequa CC1101 + NRF24 | GPIO15, software CS | Same wiring as RF 2in1 v2 | Documented pinout, hardware test pending |
+| M5Stack Cap CC1101 | Kernel CS1, GPIO7 | GDO0=15, RF switch=14, power=26; GDO2 selects the RF path | Documented pinout, hardware test pending |
+
+The app verifies the chip identity, tuned frequency, and receive state.
+It restores the hat control pin configuration on exit and keeps the shared
+cap/LCD power enabled, following the stock cap app's power handling.
+Close another app using the same SPI radio before starting Monitor.
+
+Pinout sources are the manufacturer's RF 2in1 guides, M5Stack's Cap CC1101
+and Cardputer Zero documentation, and the Pingequa design reference.
+
+- [Kasiin RF 2in1 v1](https://kasiin.com/blog/2025-11-26-cardputer-adv_rf_2in1-module/)
+- [Kasiin RF 2in1 v2](https://kasiin.com/blog/2026-01-22-cardputer-adv_rf_2in1-20-module/)
+- [M5Stack Cap CC1101](https://docs.m5stack.com/en/arduino/projects/cap/cap_cc1101)
+- [Cardputer Zero EXT header](https://docs.m5stack.com/en/CardputerZero)
+- [Pingequa pin mapping](https://github.com/pingequalab/cardputer-adv-cc1101-nrf24-auto-switch/blob/main/docs/pin-mapping.md)
 
 ## Lifetime Results
 

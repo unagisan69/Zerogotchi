@@ -10,6 +10,7 @@ import time
 
 import gnss
 import updater
+import subghz
 import upload_queue
 import wifi
 
@@ -58,6 +59,12 @@ def snapshot():
         results.append(("GPS fix", "current" if monitor.position(now) else "waiting"))
     finally:
         monitor.close()
+    try:
+        profile = subghz.HATS[subghz.hat_key()]
+        results.append(("CC1101 profile", profile.name))
+        results.append(("CC1101 frequency", f"{subghz.configured_frequency():g} MHz"))
+    except wifi.WifiError as error:
+        results.append(("CC1101 config", str(error)))
     results.append(("LoRa interface", "SPI available" if os.access("/dev/spidev0.1", os.R_OK | os.W_OK) else "unavailable"))
     backlight = Path("/sys/class/backlight/backlight/brightness")
     results.append(("Display control", "available" if os.access(backlight, os.W_OK) else "unavailable"))
@@ -67,7 +74,7 @@ def snapshot():
         results.append(("DarkTime", "Never" if dark_time == 0 else f"{dark_time} seconds"))
     except (OSError, ValueError, TypeError, AttributeError):
         results.append(("DarkTime", "default 30 seconds"))
-    missing = [tool for tool in ("nmcli", "iw", "bluetoothctl", "curl", "tcpdump", "hcxpcapngtool")
+    missing = [tool for tool in ("nmcli", "iw", "bluetoothctl", "curl", "tcpdump", "hcxpcapngtool", "pinctrl")
                if not shutil.which(tool, path=os.environ.get("PATH", "") + ":/usr/sbin")]
     results.append(("Tools", ", ".join(missing) + " missing" if missing else "all installed"))
     free = shutil.disk_usage(wifi.DATA if wifi.DATA.exists() else Path.home()).free

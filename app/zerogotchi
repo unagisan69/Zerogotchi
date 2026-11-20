@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 import gnss
 import diagnostics
 import screen_idle
+import subghz
 import upload_queue
 import lifetime
 import meshmapping
@@ -172,6 +173,9 @@ class Display:
 
     def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn",
                   listening_frame=0, location=None, can_pause=False, paused=False, satellites=None):
+        if isinstance(status, subghz.Status):
+            self.draw_subghz(status, paused)
+            return
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((10, 11, 109, 129), radius=12, fill=PANEL)
@@ -252,6 +256,36 @@ class Display:
         draw.rectangle((304, 154, 306, 158), fill=color)
         if battery:
             draw.rectangle((283, 152, 282 + max(1, int(battery * .19)), 160), fill=color)
+        self.paint(image)
+
+    def draw_subghz(self, status, paused):
+        image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        draw = ImageDraw.Draw(image)
+        draw.text((12, 8), f"{status.frequency:g} MHz", font=self.title, fill=TEAL)
+        draw.text((308, 12), status.phase, font=self.small, fill=MUTED, anchor="ra")
+        strength = "—" if status.rssi is None else f"{status.rssi:.1f}"
+        peak = "—" if status.peak is None else f"{status.peak:.1f}"
+        draw.text((12, 34), f"RSSI {strength} dBm", font=self.body, fill=WHITE)
+        draw.text((178, 34), f"Peak {peak}", font=self.body, fill=TEAL)
+        left, top, right, bottom = 30, 58, 307, 118
+
+        def y(value):
+            return bottom - round((min(-20, max(-120, value)) + 120) * (bottom - top) / 100)
+
+        draw.rectangle((left, top, right, bottom), outline=PANEL)
+        draw.text((4, top - 4), "-20", font=self.small, fill=MUTED)
+        draw.text((0, bottom - 10), "-120", font=self.small, fill=MUTED)
+        threshold_y = y(status.threshold)
+        draw.line((left, threshold_y, right, threshold_y), fill=MUTED)
+        points = [(right - 2 * (len(status.trace) - index - 1), y(value))
+                  for index, value in enumerate(status.trace)]
+        if len(points) > 1:
+            draw.line(points, fill=TEAL, width=2)
+        draw.text((12, 125), f"{status.events} events  ·  Threshold {status.threshold} dBm",
+                  font=self.small, fill=WHITE)
+        draw.text((12, 151), ("P Resume" if paused else "P Pause") + "   /   Esc to stop",
+                  font=self.small, fill=MUTED)
+        draw.text((308, 151), f"{status.elapsed}s", font=self.small, fill=MUTED, anchor="ra")
         self.paint(image)
 
     def draw_wardrive_stats(self, draw, status, location, satellites):
@@ -369,11 +403,87 @@ class App:
     def home(self):
         self.screen("Zerogotchi", items=(
             (AUTO_ATTACK_TITLE, self.auto), ("Wardriving", self.wardriving),
-            ("Meshmapping", self.meshmapping), (MANUAL_ATTACK_TITLE, self.disclaimer),
+            ("Meshmapping", self.meshmapping), ("Sub-Ghz", self.subghz),
+            (MANUAL_ATTACK_TITLE, self.disclaimer),
             ("Results", self.results), ("Upload queue", self.uploads),
             ("Diagnostics", self.diagnostics), ("About", self.about),
             ("Settings", self.settings), ("Update", self.update), ("Exit", self.exit),
         ), back=self.exit)
+
+    def subghz(self):
+        try:
+            profile = subghz.hat_key()
+            mhz = subghz.configured_frequency()
+            threshold = subghz.configured_threshold()
+        except wifi.WifiError as error:
+            self.screen("Sub-Ghz", str(error), (("Choose hat", self.subghz_hat),
+                        ("Set frequency", self.subghz_frequency), ("Set threshold", self.subghz_threshold)),
+                        back=self.home)
+            return
+        self.screen("Sub-Ghz", "CC1101 signal-strength monitor.", (
+            ("Monitor", self.start_subghz),
+            (f"Hat: {subghz.HATS[profile].name}", self.subghz_hat),
+            (f"Frequency: {mhz:g} MHz", self.subghz_frequency),
+            (f"Threshold: {threshold} dBm", self.subghz_threshold),
+        ), back=self.home)
+
+    def subghz_hat(self):
+        def save(profile):
+            wifi.save_setting("subghz-hat", profile)
+            self.subghz()
+
+        self.screen("CC1101 hat", "Select the attached hat's wiring.", tuple(
+            (hat.name, lambda profile=profile: save(profile)) for profile, hat in subghz.HATS.items()),
+            back=self.subghz)
+
+    def subghz_frequency(self):
+        def save(value):
+            try:
+                number = subghz.frequency(value)
+            except wifi.WifiError as error:
+                self.screen("Sub-Ghz frequency", str(error), back=custom)
+                return
+            wifi.save_setting("subghz-frequency", f"{number:g}")
+            self.subghz()
+
+        def custom():
+            self.edit("Sub-Ghz frequency", "Enter MHz, e.g. 433.92.",
+                      re.compile(r"[0-9]+(?:\.[0-9]+)?"), 12, save, self.subghz_frequency,
+                      initial=wifi.read_setting("subghz-frequency") or "433.92")
+
+        self.screen("Sub-Ghz frequency", items=tuple(
+            (f"{mhz:g} MHz", lambda mhz=mhz: save(str(mhz))) for mhz in subghz.PRESETS
+        ) + (("Custom…", custom),), back=self.subghz)
+
+    def subghz_threshold(self):
+        def save(value):
+            number = int(value)
+            if not -110 <= number <= -20:
+                self.subghz_threshold()
+                self.update_editor("Use -110 to -20 dBm.")
+                return
+            wifi.save_setting("subghz-threshold", str(number))
+            self.subghz()
+
+        self.edit("Activity threshold", "RSSI above this level counts as an event.",
+                  re.compile(r"-[0-9]{2,3}"), 4, save, self.subghz,
+                  initial=wifi.read_setting("subghz-threshold") or "-70")
+
+    def start_subghz(self):
+        profile = subghz.hat_key()
+        mhz, threshold = subghz.configured_frequency(), subghz.configured_threshold()
+
+        def done(status):
+            peak = "—" if status.peak is None else f"{status.peak:.1f} dBm"
+            self.screen("Monitor stopped",
+                        f"{status.frequency:g} MHz · {status.elapsed}s\nPeak {peak}\n"
+                        f"{status.events} threshold events · {status.samples} samples",
+                        back=self.subghz)
+
+        self.work("Sub-Ghz Monitor", "Starting CC1101…",
+                  lambda: subghz.monitor(profile, mhz, threshold, self.cancel, self.pause, self.report_capture),
+                  done, self.subghz, cancellable=True)
+        self.auto_status = subghz.Status("Starting", mhz, threshold)
 
     def diagnostics(self):
         def show(results):
@@ -1112,7 +1222,7 @@ class App:
             return
         if self.future:
             if (code == KEY_P and not self.cancel.is_set()
-                    and isinstance(self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus))):
+                    and isinstance(self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus, subghz.Status))):
                 if self.pause.is_set():
                     self.pause.clear()
                     self.auto_status = replace(self.auto_status, phase="Resuming")
@@ -1125,6 +1235,8 @@ class App:
                 self.cancel.set()
                 if isinstance(self.auto_status, wigle.WardriveStatus):
                     self.screen("Stopping Wardriving", "Finishing the current scan…", footer="Please wait")
+                elif isinstance(self.auto_status, subghz.Status):
+                    self.screen("Stopping Monitor", "Putting the CC1101 to sleep…", footer="Please wait")
                 elif isinstance(self.auto_status, meshmapping.Status):
                     self.screen("Stopping Meshmapping", "Saving mesh observations…", footer="Please wait")
                 elif isinstance(self.auto_status, wifi.AutoStatus):
@@ -1216,7 +1328,7 @@ class App:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
                 if self.future and not self.cancel.is_set():
                     update = self.capture_update
-                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus, meshmapping.Status)) and update != self.auto_status:
+                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus, meshmapping.Status, subghz.Status)) and update != self.auto_status:
                         self.auto_status, self.dirty = update, True
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
@@ -1262,7 +1374,7 @@ class App:
                     self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,
                                            self.battery, self.theme, listening_frame, self.wardrive_location,
                                            can_pause=bool(self.future) and isinstance(
-                                               self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus)),
+                                               self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus, subghz.Status)),
                                            paused=self.pause.is_set(), satellites=satellites)
                     last_listening_frame = listening_frame
                     self.dirty, last_paint, last_blink = False, now, blink
