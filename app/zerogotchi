@@ -281,7 +281,7 @@ class Display:
                   for index, value in enumerate(status.trace)]
         if len(points) > 1:
             draw.line(points, fill=TEAL, width=2)
-        draw.text((12, 125), f"{status.events} events  ·  Threshold {status.threshold} dBm",
+        draw.text((12, 125), f"{status.events} events · Threshold {status.threshold} · Resync {status.recoveries}",
                   font=self.small, fill=WHITE)
         draw.text((12, 151), ("P Resume" if paused else "P Pause") + "   /   Esc to stop",
                   font=self.small, fill=MUTED)
@@ -342,15 +342,16 @@ class Display:
         self.present()
 
     def present(self):
-        if self.stride == WIDTH * 2:
-            if os.pwrite(self.fd, self.frame, self.offset) != len(self.frame):
-                raise OSError("Short LCD write")
-            return
-        for row in range(HEIGHT):
-            start = row * WIDTH * 2
-            data = self.frame[start:start + WIDTH * 2]
-            if os.pwrite(self.fd, data, self.offset + row * self.stride) != len(data):
-                raise OSError("Short LCD write")
+        with subghz.SPI_LOCK:
+            if self.stride == WIDTH * 2:
+                if os.pwrite(self.fd, self.frame, self.offset) != len(self.frame):
+                    raise OSError("Short LCD write")
+                return
+            for row in range(HEIGHT):
+                start = row * WIDTH * 2
+                data = self.frame[start:start + WIDTH * 2]
+                if os.pwrite(self.fd, data, self.offset + row * self.stride) != len(data):
+                    raise OSError("Short LCD write")
 
 
 class App:
@@ -477,7 +478,7 @@ class App:
             peak = "—" if status.peak is None else f"{status.peak:.1f} dBm"
             self.screen("Monitor stopped",
                         f"{status.frequency:g} MHz · {status.elapsed}s\nPeak {peak}\n"
-                        f"{status.events} threshold events · {status.samples} samples",
+                        f"{status.events} events · {status.samples} samples · {status.recoveries} resyncs",
                         back=self.subghz)
 
         self.work("Sub-Ghz Monitor", "Starting CC1101…",

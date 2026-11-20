@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 import re
 import subprocess
+import struct
+import threading
 import time
 
 import wifi
@@ -16,7 +18,7 @@ import wifi
 @dataclass(frozen=True)
 class Hat:
     name: str
-    cs: int | None
+    cs: int
     inputs: tuple = ()
     outputs: tuple = ()
     band_switch: int | None = None
@@ -25,14 +27,16 @@ class Hat:
 
 HATS = {
     "rf2-v1": Hat("Kasiin RF 2in1 v1", 22, inputs=(23,)),
-    "rf2-v2": Hat("Kasiin RF 2in1 v2", 15, outputs=((22, 1), (23, 0))),
-    "pingequa": Hat("Pingequa CC1101 + NRF24", 15, outputs=((22, 1), (23, 0))),
-    "m5-cap": Hat("M5Stack Cap CC1101", None, inputs=(15,), outputs=((22, 1),),
+    "rf2-v2": Hat("Kasiin RF 2in1 v2", 15, inputs=(7,), outputs=((22, 1), (23, 0))),
+    "pingequa": Hat("Pingequa CC1101 + NRF24", 15, inputs=(7,), outputs=((22, 1), (23, 0))),
+    "m5-cap": Hat("M5Stack Cap CC1101", 7, inputs=(15,), outputs=((22, 1),),
                   band_switch=14, power=26),
 }
 PRESETS = (315.0, 433.92, 868.0, 915.0)
 BANDS = ((300.0, 348.0), (387.0, 464.0), (779.0, 928.0))
 BANDWIDTH = 270.8
+# Keep app-owned LCD writes and radio requests ordered as well as kernel-arbitrated.
+SPI_LOCK = threading.RLock()
 
 
 def frequency(value):
@@ -66,6 +70,16 @@ def configured_threshold():
         raise wifi.WifiError("Use a threshold from -110 to -20 dBm") from error
 
 
+def kernel_cs_pin():
+    path = Path("/sys/firmware/devicetree/base/soc/spi@7e204000/cs-gpios")
+    try:
+        data = path.read_bytes()
+        cells = struct.unpack(f">{len(data) // 4}I", data)
+        return cells[4] if len(cells) >= 6 and cells[0] == cells[3] and cells[5] & 1 else None
+    except (OSError, ValueError, struct.error):
+        return None
+
+
 def pin_state(pin):
     output = subprocess.check_output(["pinctrl", "get", str(pin)], text=True, timeout=3)
     match = re.match(r"\s*\d+:\s+(ip|op|a[0-9])\s+(pu|pd|pn|--)\s+.*?\|\s+(hi|lo)", output)
@@ -84,15 +98,15 @@ class CC1101:
     def __init__(self, spi, lines, hat, value_type):
         self.spi, self.lines, self.hat, self.value_type = spi, lines, hat, value_type
         self.version = None
+        self.frequency = None
+        self.recoveries = 0
+        self.unsteady_reads = 0
+        self.last_bad_state = None
+        self.recent_recoveries = deque()
 
     def transfer(self, data):
-        if self.hat.cs is not None:
-            self.lines.set_value(self.hat.cs, self.value_type.INACTIVE)
-        try:
+        with SPI_LOCK:
             return self.spi.xfer2(list(data))
-        finally:
-            if self.hat.cs is not None:
-                self.lines.set_value(self.hat.cs, self.value_type.ACTIVE)
 
     def read(self, register):
         return self.transfer((register | (0xC0 if register >= 0x30 else 0x80), 0))[1]
@@ -112,19 +126,10 @@ class CC1101:
         self.version = identities[0][1]
 
     def initialize(self):
-        # After SPWD, CS must stay low until the crystal is ready to accept SPI.
-        if self.hat.cs is None:
-            set_pin(7, "op", "dl")
-        else:
-            self.lines.set_value(self.hat.cs, self.value_type.INACTIVE)
-        try:
-            time.sleep(0.005)
-            self.strobe(0x3D)
-        finally:
-            if self.hat.cs is None:
-                set_pin(7, "op", "dh")
-            else:
-                self.lines.set_value(self.hat.cs, self.value_type.ACTIVE)
+        # The transfer delay keeps CS low during oscillator startup, with the
+        # kernel holding the SPI bus so LCD traffic cannot enter this wakeup.
+        with SPI_LOCK:
+            self.spi.xfer2([0x3D], 500_000, 5_000)
         self.probe()
         self.strobe(0x30)
         time.sleep(0.15)
@@ -159,12 +164,45 @@ class CC1101:
         time.sleep(0.015)
         self.strobe(0x34)
         time.sleep(0.025)
-        if self.read(0x35) & 31 != 13:
-            raise wifi.WifiError("CC1101 could not enter receive mode")
+        deadline = time.monotonic() + 0.25
+        while self.state() != 13:
+            if time.monotonic() >= deadline:
+                raise wifi.WifiError("CC1101 could not enter receive mode")
+            time.sleep(0.003)
+        self.frequency = mhz
+
+    def state(self):
+        # TI SWRZ020E: asynchronously updated MARCSTATE needs consecutive matching reads.
+        previous = self.read(0x35) & 31
+        for _ in range(7):
+            current = self.read(0x35) & 31
+            if current == previous:
+                return current
+            self.unsteady_reads += 1
+            previous = current
+        return None
 
     def sample(self):
-        if self.read(0x35) & 31 != 13:
-            raise wifi.WifiError("CC1101 left receive mode")
+        state = self.state()
+        if state is None:
+            return None
+        if state != 13:
+            self.last_bad_state = state
+            now = time.monotonic()
+            while self.recent_recoveries and now - self.recent_recoveries[0] > 10:
+                self.recent_recoveries.popleft()
+            if len(self.recent_recoveries) >= 3:
+                raise wifi.WifiError(
+                    f"CC1101 RX remains unstable (state 0x{state:02x}). Check the hat connection and profile."
+                )
+            self.probe()
+            self.strobe(0x36)
+            time.sleep(0.003)
+            self.strobe(0x3A)
+            self.tune(self.frequency)
+            self.recent_recoveries.append(now)
+            self.recoveries += 1
+            return None
         raw = self.read(0x34)
         return (raw - 256 if raw >= 128 else raw) / 2 - 74
 
@@ -182,6 +220,10 @@ def receiver(profile):
     except ImportError as error:
         raise wifi.WifiError("CC1101 requires python3-libgpiod and python3-spidev") from error
     hat = HATS[profile]
+    if kernel_cs_pin() != hat.cs:
+        raise wifi.WifiError(
+            f"Hat needs kernel SPI CS1 on GPIO{hat.cs}. Apply its boot configuration and restart. See the guide."
+        )
     wifi.DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         with ExitStack() as cleanup:
@@ -198,8 +240,6 @@ def receiver(profile):
                         set_pin(pin, *state)
             cleanup.callback(restore)
             outputs = dict(hat.outputs)
-            if hat.cs is not None:
-                outputs[hat.cs] = 1
             if hat.band_switch is not None:
                 outputs[hat.band_switch] = 0
             if hat.power is not None:
@@ -207,8 +247,6 @@ def receiver(profile):
             for pin in (*outputs, *hat.inputs):
                 if pin != hat.power:
                     states[pin] = pin_state(pin)
-            if hat.cs is None:
-                states[7] = pin_state(7)
             config = {pin: gpiod.LineSettings(direction=Direction.OUTPUT,
                        output_value=Value.ACTIVE if value else Value.INACTIVE) for pin, value in outputs.items()}
             config.update({pin: gpiod.LineSettings(direction=Direction.INPUT) for pin in hat.inputs})
@@ -224,10 +262,7 @@ def receiver(profile):
                 spi.close()
             cleanup.callback(close_spi)
             spi.mode, spi.max_speed_hz = 0, 500_000
-            spi.no_cs = hat.cs is not None
-            if hat.cs == 15:
-                states[7] = pin_state(7)
-                set_pin(7, "ip")  # RF2 v2 puts GDO0 on the kernel's default CS pin.
+            spi.no_cs = False
             radio = CC1101(spi, lines, hat, Value)
             radio.initialize()
             cleanup.callback(lambda: stop_quietly(radio))
@@ -253,6 +288,7 @@ class Status:
     samples: int = 0
     elapsed: int = 0
     trace: tuple = ()
+    recoveries: int = 0
 
 
 def monitor(profile, mhz, threshold, cancel, pause, report):
@@ -273,6 +309,12 @@ def monitor(profile, mhz, threshold, cancel, pause, report):
                 radio.tune(mhz)
                 active = False
             strength = radio.sample()
+            if strength is None:
+                status = replace(status, phase="Recovering", recoveries=radio.recoveries,
+                                 elapsed=int(time.monotonic() - started))
+                report(status)
+                cancel.wait(0.04)
+                continue
             event = not active and strength >= threshold
             if strength >= threshold:
                 active = True
@@ -283,7 +325,7 @@ def monitor(profile, mhz, threshold, cancel, pause, report):
                             max(status.peak if status.peak is not None else strength, strength),
                             min(status.floor if status.floor is not None else strength, strength),
                             status.events + int(event), status.samples + 1,
-                            int(time.monotonic() - started), tuple(history))
+                            int(time.monotonic() - started), tuple(history), radio.recoveries)
             now = time.monotonic()
             if now >= next_report:
                 report(status)

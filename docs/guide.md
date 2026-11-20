@@ -115,14 +115,17 @@ again before upload.
 
 ## Sub-Ghz Monitor
 
-1. Open **Sub-Ghz → Hat** and choose the attached CC1101 board.
+1. Complete the **Kernel SPI setup** below for your hat, then open
+   **Sub-Ghz → Hat** and choose the attached CC1101 board.
    For the switch-selected Kasiin RF 2in1, select **Kasiin RF 2in1 v1** and
    move its physical switch to **CC1101**.
 2. Choose **Frequency**. Presets are 315, 433.92, 868, and 915 MHz. **Custom**
    accepts 300–348, 387–464, or 779–928 MHz. Use an antenna suited to the band.
 3. Set the **Threshold**, then select **Monitor**. The screen plots recent RSSI
    and shows current signal strength, peak level, elapsed time, and threshold
-   events. An event begins when RSSI crosses the threshold. A 3 dB hysteresis
+   events. **Resync** counts automatic receiver recoveries. Brief state changes
+   are rechecked and recovered automatically. Repeated failures show a hat
+   connection/profile error. An event begins when RSSI crosses the threshold. A 3 dB hysteresis
    reduces repeated counts near that threshold.
 4. Press **P** to pause/resume or **Esc** to stop. Display sleep follows DarkTime.
 
@@ -137,10 +140,30 @@ The host uses SPI0 SCLK=11, MOSI=10, and MISO=9.
 
 | Profile | CC1101 CS | Other controls | Verification |
 | --- | --- | --- | --- |
-| Kasiin RF 2in1 v1 | GPIO22, software CS | GDO0=23; physical CC1101/NRF24 switch | Tested on zero2 with CC1101 version 0x14 |
-| Kasiin RF 2in1 v2 | GPIO15, software CS | GDO0=7; NRF24 CS=22 held high and CE=23 held low | Documented pinout, hardware test pending |
-| Pingequa CC1101 + NRF24 | GPIO15, software CS | Same wiring as RF 2in1 v2 | Documented pinout, hardware test pending |
+| Kasiin RF 2in1 v1 | GPIO22, kernel CS1 | GDO0=23; physical CC1101/NRF24 switch | Tested on zero2 with CC1101 version 0x14 |
+| Kasiin RF 2in1 v2 | GPIO15, kernel CS1 | GDO0=7; NRF24 CS=22 held high and CE=23 held low | Documented pinout, hardware test pending |
+| Pingequa CC1101 + NRF24 | GPIO15, kernel CS1 | Same wiring as RF 2in1 v2 | Documented pinout, hardware test pending |
 | M5Stack Cap CC1101 | Kernel CS1, GPIO7 | GDO0=15, RF switch=14, power=26; GDO2 selects the RF path | Documented pinout, hardware test pending |
+
+### Kernel SPI setup
+
+The LCD and the hat share SPI0. Each hat needs its CC1101 chip select managed
+by the kernel so display transfers cannot overlap a selected radio.
+The stock Cap CC1101 already matches the default GPIO7 chip select.
+For another profile, back up `/boot/firmware/config.txt`, then add the
+appropriate line **after the Cardputer Zero overlay**, under `[all]`.
+
+| Hat | Overlay line |
+| --- | --- |
+| Kasiin RF 2in1 v1 | `dtoverlay=spi0-2cs,cs0_pin=8,cs1_pin=22` |
+| Kasiin RF 2in1 v2 / Pingequa | `dtoverlay=spi0-2cs,cs0_pin=8,cs1_pin=15` |
+| M5Stack Cap CC1101 | `dtoverlay=spi0-2cs,cs0_pin=8,cs1_pin=7` |
+
+Use one matching line and restart the device. GPIO8 remains the LCD select.
+When changing between hats with different chip selects, update this line
+and restart again. Monitor checks the active configuration before starting.
+Keep your original boot file as a backup. Returning to a standard SPI LoRa cap
+also requires restoring the default GPIO7 chip select and restarting.
 
 The app verifies the chip identity, tuned frequency, and receive state.
 It restores the hat control pin configuration on exit and keeps the shared

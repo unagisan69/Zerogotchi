@@ -10,6 +10,10 @@ version heading when publishing a release.
 
 ## Unreleased
 
+- Require kernel-managed chip select for CC1101 hats so LCD traffic cannot enter a radio transaction. Document the per-hat boot configuration.
+- Stabilize CC1101 status reads using the silicon-errata workaround and wait for RX transitions.
+- Recover transient RX exits by flushing and retuning the receiver. Show resynchronizations on Monitor and stop with an actionable error if recovery repeatedly fails.
+
 ## [0.4.21](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.21)
 
 - Added **Sub-Ghz → Monitor** with live CC1101 RSSI history, peak signal level, threshold events, pause/resume, and frequency presets/custom tuning.
