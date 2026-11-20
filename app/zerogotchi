@@ -22,6 +22,9 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 import gnss
+import diagnostics
+import screen_idle
+import upload_queue
 import lifetime
 import meshmapping
 import survey_privacy
@@ -321,6 +324,9 @@ class App:
         self.display = display
         self.keyboard = keyboard
         self.executor = executor
+        self.screen_idle = screen_idle.ScreenIdle()
+        self.queue_process = None
+        self.next_queue = 0
         self.cancel = threading.Event()
         self.pause = threading.Event()
         self.future = None
@@ -364,9 +370,72 @@ class App:
         self.screen("Zerogotchi", items=(
             (AUTO_ATTACK_TITLE, self.auto), ("Wardriving", self.wardriving),
             ("Meshmapping", self.meshmapping), (MANUAL_ATTACK_TITLE, self.disclaimer),
-            ("Results", self.results), ("About", self.about),
+            ("Results", self.results), ("Upload queue", self.uploads),
+            ("Diagnostics", self.diagnostics), ("About", self.about),
             ("Settings", self.settings), ("Update", self.update), ("Exit", self.exit),
         ), back=self.exit)
+
+    def diagnostics(self):
+        def show(results):
+            def detail(name, value):
+                self.screen(name, value, back=lambda: show(results))
+
+            self.screen("Diagnostics", items=(
+                ("Refresh checks", self.diagnostics),
+                *tuple((f"{name}: {value}", lambda name=name, value=value: detail(name, value))
+                       for name, value in results),
+            ), back=self.home)
+
+        self.work("Diagnostics", "Checking hardware and configuration…",
+                  diagnostics.snapshot, show, self.home)
+
+    def uploads(self):
+        try:
+            jobs = upload_queue.jobs()
+        except OSError:
+            self.screen("Upload queue", "Could not read the queue.", back=self.home)
+            return
+        active = sum(job["state"] in ("pending", "sending") for job in jobs)
+        failed = sum(job["state"] == "failed" for job in jobs)
+        self.screen("Upload queue", f"{active} queued · {failed} need attention",
+                    (("Refresh", self.uploads), *tuple(
+                        (f"{upload_queue.PROVIDERS[job['provider']]} · {job['state']} · {job['label']}",
+                         lambda job=job: self.upload_details(job)) for job in jobs)), back=self.home)
+
+    def upload_details(self, job):
+        def change(cancel=False):
+            upload_queue.change(job["id"], cancel=cancel)
+            self.next_queue = 0
+            self.uploads()
+
+        options = ()
+        if job["state"] in ("pending", "failed", "cancelled"):
+            options = (("Retry upload", change),)
+        if job["state"] in ("pending", "failed"):
+            options += (("Cancel upload", lambda: change(True)),)
+        message = job["result"] or "Waiting for an internet connection."
+        self.screen(upload_queue.PROVIDERS[job["provider"]], f"{job['state']} · {job['attempts']} attempts\n{message}",
+                    options, self.uploads)
+
+    def poll_upload_queue(self, now):
+        if self.queue_process is not None:
+            if self.queue_process.poll() is None:
+                return
+            self.queue_process.wait()
+            self.queue_process = None
+        if now < self.next_queue or not self.online:
+            return
+        self.next_queue = now + 15
+        try:
+            if not upload_queue.has_pending():
+                return
+            self.queue_process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).with_name("upload_queue.py")), "--drain"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            pass
 
     def results(self):
         self.screen("Lifetime Results", items=(
@@ -500,9 +569,9 @@ class App:
         def back():
             self.meshmapping_done(survey, back=previous)
 
-        self.screen("Upload MeshCore nodes?", "Send mapped MeshCore IDs, names, GPS locations, and signal levels?",
+        self.screen("Upload MeshCore nodes?", "Queue mapped MeshCore IDs, names, GPS locations, and signal levels for upload?",
                     (("Upload", lambda: self.provider_request(
-                        "WDG Wars", lambda: meshmapping.upload(survey), back)),
+                        "WDG Wars", lambda: upload_queue.submit_mesh(survey), back)),
                      ("Cancel", back)), back)
 
     def auto_log(self):
@@ -739,12 +808,7 @@ class App:
                     (("Accept and submit", lambda: self.send(path, back)),), back)
 
     def send(self, path, back):
-        def done(counts):
-            accepted, skipped, rejected = counts
-            self.screen("Submission result",
-                        f"Accepted {accepted}. Skipped {skipped}. Rejected {rejected}.", back=back)
-        self.work("Submitting", "Sending WPA hashes to OnlineHashCrack…", lambda: wifi.upload(path),
-                  done, back)
+        self.provider_request("OnlineHashCrack", lambda: upload_queue.submit("ohc", path), back)
 
     def settings(self):
         is_set = bool(wifi.KEY_PATTERN.fullmatch(wifi.read_setting("api-key")))
@@ -851,14 +915,14 @@ class App:
             messages = []
             for name, provider in providers:
                 try:
-                    result = provider.upload(path)
+                    result = upload_queue.submit("wigle" if provider is wigle else "wdg", path)
                 except (wifi.WifiError, OSError) as error:
                     result = str(error)
                 messages.append(f"{name}: {result}" if len(providers) > 1 else result)
             return "\n".join(messages)
 
         self.screen(f"Upload to {destination}?",
-                    "Send filtered Wi-Fi and BLE addresses, names, signal levels, and GPS locations?",
+                    "Send Wi-Fi/BLE names, addresses, signal levels and GPS locations now or when online?",
                     (("Upload", lambda: self.provider_request("Survey upload", upload, done)), ("Cancel", back)),
                     back)
 
@@ -1038,6 +1102,10 @@ class App:
         self.screen(title, prompt, footer="Esc Stop" if cancellable else "Please wait")
 
     def key(self, code, state):
+        if state and self.screen_idle.activity():
+            self.shift.clear()
+            self.dirty = True
+            return
         if code in (42, 54):
             self.shift.add(code) if state else self.shift.discard(code)
         if state != 1:
@@ -1090,7 +1158,7 @@ class App:
         if not self.connectivity:
             try:
                 self.connectivity = (subprocess.Popen(
-                    ["nmcli", "networking", "connectivity", "check"], stdout=subprocess.PIPE,
+                    ["nmcli", "networking", "connectivity"], stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL, text=True, env={**os.environ, "LC_ALL": "C"},
                 ), now)
             except OSError:
@@ -1153,6 +1221,9 @@ class App:
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
                 now = time.monotonic()
+                self.screen_idle.tick()
+                self.poll_device_status(now)
+                self.poll_upload_queue(now)
                 self.poll_startup_update(now)
                 if self.gnss:
                     if not self.auto_status:
@@ -1171,7 +1242,6 @@ class App:
                 else:
                     listening_since = None
                 if self.auto_status:
-                    self.poll_device_status(now)
                     if isinstance(self.auto_status, (wigle.WardriveStatus, meshmapping.Status)):
                         sat_count = self.gnss.satellites(now) if self.gnss else None
                         if sat_count != satellites:
@@ -1186,7 +1256,9 @@ class App:
                             self.wardrive_location, self.dirty = location, True
                     elif isinstance(self.auto_status, wifi.AutoStatus):
                         self.poll_survey(now)
-                if self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
+                if self.screen_idle.sleeping:
+                    pass
+                elif self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
                     self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,
                                            self.battery, self.theme, listening_frame, self.wardrive_location,
                                            can_pause=bool(self.future) and isinstance(
@@ -1213,6 +1285,14 @@ class App:
                         self.key(code, state)
         finally:
             self.stop_startup_check()
+            self.screen_idle.restore()
+            if self.queue_process is not None:
+                if self.queue_process.poll() is None:
+                    try:
+                        os.killpg(self.queue_process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                self.queue_process.wait()
             self.cancel.set()
             self.survey_cancel.set()
             self.survey_executor.shutdown(wait=False, cancel_futures=True)

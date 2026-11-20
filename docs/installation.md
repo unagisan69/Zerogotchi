@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.19
+tag=v0.4.20
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt

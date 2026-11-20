@@ -10,6 +10,13 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.20](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.20)
+
+- Added Diagnostics for radio interfaces, GPS, connectivity, storage, tools, and configuration.
+- Fixed internet detection to read NetworkManager connectivity without requiring privileged rechecks.
+- Follow APPLaunch DarkTime, including Never. The first keypress wakes the display while collection continues.
+- Added a persistent Upload queue for WiGLE, WDG Wars, MeshCore, and consented OnlineHashCrack submissions. Pending jobs retry while the app is open and online, with separate provider outcomes and manual retry/cancel controls.
+
 ## [0.4.19](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.19)
 
 - Clarified WiGLE credential setup with numbered steps, a Next action, a visible API Name, saved status, and automatic account verification.

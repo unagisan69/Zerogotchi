@@ -49,8 +49,10 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | **[Lifetime Results](docs/guide.md#lifetime-results)** | View Auto and Manual capture counts and success rates, plus Wardriving discovery totals. Reset counters from the dashboard. |
 | **[SSID allow list](docs/guide.md#settings-and-dashboard)** | Limit Auto and Wardriving Wi-Fi discovery to specific network names. |
 | **[Survey uploads](docs/guide.md#survey-uploads)** | Set up WiGLE with guided API Name and API Token entry and an automatic account check. Send GPS-tagged surveys to WiGLE or WDG Wars, or choose **Upload to All** after Wardriving, or pick a saved survey later. |
+| **[Upload queue](docs/guide.md#upload-queue)** | Keep approved uploads across restarts, retry when online, and review each destination’s outcome. |
+| **[Diagnostics](docs/guide.md#diagnostics)** | Inspect radio interfaces, GPS, internet, tools, storage, and configuration. |
 | **[Private Zones](docs/guide.md#private-zones)** | Pause Wardriving and Meshmapping in GPS circles and filter observations against those zones and the SSID block list before sending. |
-| **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto WiFi Attack, Manual WiFi Attack, and Wardriving. Dashboard indicators use the Cardputer’s live status. |
+| **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto WiFi Attack, Manual WiFi Attack, and Wardriving. Dashboard indicators use the Cardputer’s live status. Display sleep follows APPLaunch DarkTime. |
 | **[In-app updates](docs/installation.md#install-or-upgrade)** | Check automatically on launch or from the main menu. Install a verified release with visible progress and automatic restart. |
 
 The **built-in Wi-Fi adapter** supports scanning and Wardriving on the stock driver. **Capture and deauth** require a USB adapter that supports monitor mode and, for deauth, injection. **GPS-tagged surveys** require a GNSS HAT with a position fix.

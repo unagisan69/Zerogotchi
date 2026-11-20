@@ -3,6 +3,7 @@
 [Back to Zerogotchi](../README.md) · [Installation](installation.md)
 
 [Auto WiFi Attack](#auto-wifi-attack) · [Manual WiFi Attack](#manual-wifi-attack) · [Saved captures](#saved-captures) ·
+[Upload queue](#upload-queue) · [Diagnostics](#diagnostics) ·
 [Wardriving](#wardriving) · [Meshmapping](#meshmapping) · [Settings](#settings-and-dashboard) ·
 [OnlineHashCrack](#onlinehashcrack) · [Private Zones](#private-zones) · [Survey uploads](#survey-uploads)
 
@@ -196,6 +197,46 @@ and GPS coordinates.
 WDG Wars uses its signed telemetry API for Wi-Fi and BLE. The upload screen
 shows separate results when sending to both services. Survey accuracy is estimated from the
 receiver’s HDOP. WPA hash submissions use the separate OnlineHashCrack flow.
+
+## Upload queue
+
+After confirming an upload, Zerogotchi saves a private snapshot in the queue.
+WiGLE and WDG Wars have separate jobs even when you choose **Upload to All**.
+MeshCore exports and consented OnlineHashCrack submissions use the same queue.
+Auto queues hashes only after its existing upfront upload consent.
+
+Pending jobs survive app exit and restart. While Zerogotchi is open, they retry
+when internet access returns, including while a session is running or the
+display is asleep. Temporary connection and server failures use increasing
+retry delays. Authentication, privacy, and invalid-data failures need attention.
+
+Open **Upload queue** from the main menu, then select **Refresh** to see the
+latest states and results. Select a pending or failed entry to retry or cancel.
+Re-sending the same snapshot to the same destination reuses its queue entry.
+An interrupted request may have reached the provider before the app stopped.
+A retry can therefore return a duplicate or merge result.
+
+Current private zones and the Wi-Fi SSID block list are checked again before
+survey upload. Credentials are read from Settings at send time. Saved payloads
+and queue history are stored under
+`~/.local/share/zerogotchi/upload-queue/`.
+
+## Diagnostics
+
+Select **Diagnostics** from the main menu to check configured Wi-Fi interfaces
+and monitor support, Bluetooth power, internet access, GNSS input and satellites,
+LoRa SPI availability, backlight control, free storage, tools, list settings,
+and saved-credential status. Select a row for its full details or **Refresh checks**
+to run again. This screen reports interface availability. A live GPS fix and
+the Meshmapping screen provide the receiver checks during normal operation.
+The existing provider settings offer account verification.
+
+## Display sleep
+
+Zerogotchi follows **APPLaunch → Settings → Screen → DarkTime**, including
+**Never**. Collection and upload retries continue while the backlight is off.
+The first keypress wakes the display. Subsequent keys operate the app normally.
+Brightness is restored when the app exits.
 
 ## Local files
 

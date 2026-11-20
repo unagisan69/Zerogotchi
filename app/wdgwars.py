@@ -49,9 +49,9 @@ def request(path, *, networks=None, meshcore_nodes=None):
         response = subprocess.run([*args, BASE_URL + path], text=True, capture_output=True,
                                   input=config, timeout=120 if uploading else 17)
     except (OSError, subprocess.SubprocessError) as error:
-        raise wifi.WifiError("WDG Wars connection failed") from error
+        raise wifi.UploadRetry("WDG Wars connection failed") from error
     if response.returncode:
-        raise wifi.WifiError("WDG Wars connection failed")
+        raise wifi.UploadRetry("WDG Wars connection failed")
     payload, _, status = response.stdout.rpartition("\n")
     try:
         result = json.loads(payload)
@@ -64,7 +64,9 @@ def request(path, *, networks=None, meshcore_nodes=None):
     if status == "429":
         wait = result.get("retry_after")
         detail = f"Retry in {wait}s." if isinstance(wait, int) and wait > 0 else "Try again later."
-        raise wifi.WifiError(f"WDG Wars upload queue is busy. {detail}")
+        raise wifi.UploadRetry(f"WDG Wars upload queue is busy. {detail}", wait if type(wait) is int and wait > 0 else 60)
+    if status.isdecimal() and int(status) >= 500:
+        raise wifi.UploadRetry(f"WDG Wars HTTP {status}. Retry later.")
     if not status.isdecimal() or not 200 <= int(status) < 300:
         raise wifi.WifiError(f"WDG Wars returned HTTP {status if status.isdecimal() else 'unknown'}")
     if result.get("ok") is not True:

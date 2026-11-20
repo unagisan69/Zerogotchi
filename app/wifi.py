@@ -515,6 +515,7 @@ def skip_reason(network, ignored, captured, channels):
 
 
 def run_auto(interface, password, cancel, report, log, auto_upload, target_seconds, pause=None):
+    import upload_queue
     allowed = allowlist()
     nearby = scan(include_ignored=True, allowed=allowed, interface="wlan0" if allowed else None)
     channels = supported_channels(interface)
@@ -530,14 +531,19 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
             targets.append(network)
     skipped = len(nearby) - len(targets)
     attempted = found = failed = 0
-    uploaded = upload_failed = 0
     queue = []
-    next_upload = 0
+    queued_ids = set()
     deauths_total = 0
 
     def status(phase, network=""):
+        counts = {state: 0 for state in ("sent", "pending", "sending", "failed")}
+        if queued_ids:
+            for job in upload_queue.jobs():
+                if job["id"] in queued_ids and job["state"] in counts:
+                    counts[job["state"]] += 1
         return AutoStatus(phase, network, attempted, len(targets), found, skipped,
-                          failed, uploaded, len(queue), upload_failed, deauths_total)
+                          failed, counts["sent"], counts["pending"] + counts["sending"],
+                          counts["failed"], deauths_total)
 
     def ready(network=""):
         def show_pause():
@@ -546,24 +552,11 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
         return wait_while_paused(cancel, pause, show_pause)
 
     def send_pending(phase):
-        nonlocal uploaded, upload_failed, next_upload
-        while (queue and not cancel.is_set() and (pause is None or not pause.is_set())
-               and time.monotonic() >= next_upload):
+        while queue and not cancel.is_set() and (pause is None or not pause.is_set()):
             report(status(phase))
-            try:
-                accepted, skipped_count, rejected = upload(queue[0])
-            except UploadRetry as error:
-                next_upload = time.monotonic() + error.delay
-                log(f"OnlineHashCrack deferred; retry in {error.delay}s")
-                break
-            except (WifiError, OSError) as error:
-                upload_failed += 1
-                log(f"OnlineHashCrack upload failed: {error}")
-            else:
-                uploaded += int(bool(accepted or skipped_count))
-                upload_failed += int(bool(rejected))
-                log(f"OnlineHashCrack result: accepted {accepted}, skipped {skipped_count}, rejected {rejected}")
-            queue.pop(0)
+            identity = queue.pop(0)
+            upload_queue.drain(identity)
+            log(f"OnlineHashCrack: {upload_queue.status(identity)}")
 
     if targets and ready():
         report(status("Preparing"))
@@ -627,18 +620,17 @@ def run_auto(interface, password, cancel, report, log, auto_upload, target_secon
                     found += int(hashes is not None)
                     log(f"{network.bssid}: {'usable hash saved' if hashes else 'PCAP saved; no usable hash'}")
                     if hashes and auto_upload:
-                        queue.append(hashes)
+                        identity = upload_queue.enqueue("ohc", hashes)
+                        queued_ids.add(identity)
+                        queue.append(identity)
                 send_pending("Uploading")
     del password
     log(f"Sweep ended: {attempted} attempted, {found} hashes, {skipped} skipped, "
         f"{failed} failed, {deauths_total} deauth bursts")
-    while queue and ready():
-        report(status("Idling"))
-        wait_until_pause_or_cancel(cancel, pause, max(0, next_upload - time.monotonic()))
-        send_pending("Idling")
     phase = "Stopped" if cancel.is_set() else "Idling"
-    log(f"{phase}: {uploaded} uploaded, {len(queue)} queued, {upload_failed} upload failures")
-    return status(phase)
+    final = status(phase)
+    log(f"{phase}: {final.uploaded} uploaded, {final.queued} queued, {final.upload_failed} upload failures")
+    return final
 
 
 def capture_name(path):

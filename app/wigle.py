@@ -59,10 +59,12 @@ def request(path, survey=None):
         response = subprocess.run([*args, BASE_URL + path], text=True, capture_output=True,
                                   input=f'user = "{pair[0]}:{pair[1]}"\n', timeout=17)
     except (OSError, subprocess.SubprocessError) as error:
-        raise wifi.WifiError("WiGLE connection failed") from error
+        raise wifi.UploadRetry("WiGLE connection failed") from error
     if response.returncode:
-        raise wifi.WifiError("WiGLE connection failed")
+        raise wifi.UploadRetry("WiGLE connection failed")
     payload, _, code = response.stdout.rpartition("\n")
+    if code.isdecimal() and (int(code) == 429 or int(code) >= 500):
+        raise wifi.UploadRetry(f"WiGLE HTTP {code}. Retry later.")
     if code in ("401", "403"):
         raise wifi.WifiError("WiGLE rejected the API credentials. Check API Name and API Token, including letter case.")
     if not code.isdecimal() or not 200 <= int(code) < 300:
@@ -97,7 +99,9 @@ def surveys():
 
 @contextmanager
 def export_survey(path):
-    if (path.parent != SURVEYS or not re.fullmatch(r"survey-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.csv", path.name)
+    queue_root = wifi.DATA / "upload-queue" / "payloads"
+    queued = path.parent.parent == queue_root and path.resolve().is_relative_to(queue_root.resolve())
+    if ((path.parent != SURVEYS and not queued) or not re.fullmatch(r"survey-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.csv", path.name)
             or path.is_symlink() or not path.is_file()):
         raise wifi.WifiError("Invalid survey file")
     configured = survey_privacy.zones()
