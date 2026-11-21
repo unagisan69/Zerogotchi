@@ -133,7 +133,7 @@ This mode receives continuously on one selected frequency with approximately
 271 kHz filter bandwidth. RSSI is an estimated signal level. Events represent
 energy above the threshold. The RSSI graph does not decode protocols.
 
-### Record, save, and replay (development build)
+### Record, save, and replay
 
 From Monitor press **R Record**. The app switches to raw **ASK/OOK** pulse
 recording at the selected frequency. Send the signal from your test remote,
