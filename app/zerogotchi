@@ -283,7 +283,7 @@ class Display:
             draw.line(points, fill=TEAL, width=2)
         draw.text((12, 125), f"{status.events} events · Threshold {status.threshold} · Resync {status.recoveries}",
                   font=self.small, fill=WHITE)
-        draw.text((12, 151), ("P Resume" if paused else "P Pause") + "   /   Esc to stop",
+        draw.text((12, 151), ("P Resume" if paused else "P Pause") + "  R Record  Esc Stop",
                   font=self.small, fill=MUTED)
         draw.text((308, 151), f"{status.elapsed}s", font=self.small, fill=MUTED, anchor="ra")
         self.paint(image)
@@ -343,6 +343,8 @@ class Display:
 
     def present(self):
         with subghz.SPI_LOCK:
+            if subghz.TX_ACTIVE.is_set():
+                return
             if self.stride == WIDTH * 2:
                 if os.pwrite(self.fd, self.frame, self.offset) != len(self.frame):
                     raise OSError("Short LCD write")
@@ -423,6 +425,7 @@ class App:
             return
         self.screen("Sub-Ghz", "CC1101 signal-strength monitor.", (
             ("Monitor", self.start_subghz),
+            ("Saved", self.subghz_saved),
             (f"Hat: {subghz.HATS[profile].name}", self.subghz_hat),
             (f"Frequency: {mhz:g} MHz", self.subghz_frequency),
             (f"Threshold: {threshold} dBm", self.subghz_threshold),
@@ -474,7 +477,12 @@ class App:
         profile = subghz.hat_key()
         mhz, threshold = subghz.configured_frequency(), subghz.configured_threshold()
 
+        self.subghz_record_requested = False
+
         def done(status):
+            if self.subghz_record_requested:
+                self.record_subghz()
+                return
             peak = "—" if status.peak is None else f"{status.peak:.1f} dBm"
             self.screen("Monitor stopped",
                         f"{status.frequency:g} MHz · {status.elapsed}s\nPeak {peak}\n"
@@ -485,6 +493,56 @@ class App:
                   lambda: subghz.monitor(profile, mhz, threshold, self.cancel, self.pause, self.report_capture),
                   done, self.subghz, cancellable=True)
         self.auto_status = subghz.Status("Starting", mhz, threshold)
+
+    def record_subghz(self):
+        profile = subghz.hat_key()
+        mhz, threshold = subghz.configured_frequency(), subghz.configured_threshold()
+        self.work("Record OOK", "Waiting for signal…", lambda: subghz.record(
+            profile, mhz, threshold, self.cancel, self.report_capture),
+            self.subghz_record_result, self.subghz, cancellable=True)
+        self.footer = "R Stop recording / Esc Stop"
+
+    def subghz_record_result(self, data, path=None):
+        duration = sum(abs(value) for value in data['pulses']) / 1_000_000
+        back = self.subghz_saved if path else self.start_subghz
+        def erase():
+            try:
+                if path:
+                    path.unlink()
+                back()
+            except OSError:
+                self.screen("Erase failed", "Could not erase recording.", back=back)
+        def save():
+            try:
+                saved = subghz.save_record(data)
+                self.screen("Recording saved", saved.name, back=self.subghz_saved)
+            except (OSError, wifi.WifiError) as error:
+                self.screen("Save failed", str(error), back=lambda: self.subghz_record_result(data))
+        def replay():
+            def begin():
+                self.work("Replay OOK", "Transmitting once… Esc to stop.",
+                          lambda: subghz.replay(subghz.hat_key(), data, self.cancel, self.report_capture),
+                          lambda result: self.screen("Replay", result,
+                              back=lambda: self.subghz_record_result(data, path)),
+                          lambda: self.subghz_record_result(data, path), cancellable=True)
+            self.screen("Replay transmission?",
+                        f"{data['frequency']:g} MHz · OOK · {duration:.2f}s\n"
+                        "Transmit only where permitted and with authorized equipment.",
+                        (("Cancel", lambda: self.subghz_record_result(data, path)), ("Replay once", begin)),
+                        back=lambda: self.subghz_record_result(data, path))
+        self.screen("Saved OOK" if path else "Recording stopped",
+                    f"{data['frequency']:g} MHz · {duration:.2f}s · {len(data['pulses'])} pulses",
+                    (("Erase", erase), ("Replay", replay)) + (() if path else (("Save", save),)), back=back)
+
+    def subghz_saved(self):
+        def open_record(path):
+            try:
+                self.subghz_record_result(subghz.load_record(path), path)
+            except (OSError, wifi.WifiError) as error:
+                self.screen("Saved OOK", str(error), back=self.subghz_saved)
+        paths = subghz.recordings()
+        self.screen("Saved transmissions", "" if paths else "No saved OOK recordings.",
+                    tuple((path.stem, lambda path=path: open_record(path)) for path in paths), back=self.subghz)
 
     def diagnostics(self):
         def show(results):
@@ -1222,6 +1280,14 @@ class App:
         if state != 1:
             return
         if self.future:
+            if code == 19 and not self.cancel.is_set():
+                if isinstance(self.auto_status, subghz.Status):
+                    self.subghz_record_requested = True
+                    self.cancel.set()
+                    return
+                if self.title == "Record OOK":
+                    self.cancel.set()
+                    return
             if (code == KEY_P and not self.cancel.is_set()
                     and isinstance(self.auto_status, (wifi.AutoStatus, wigle.WardriveStatus, subghz.Status))):
                 if self.pause.is_set():

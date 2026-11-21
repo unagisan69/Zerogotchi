@@ -10,6 +10,9 @@ version heading when publishing a release.
 
 ## Unreleased
 
+- Add 310, 330, 390, 418, 430, and 430.5 MHz presets.
+- Add raw OOK recording with R Record/Stop, Erase/Replay/Save actions, and Sub-Ghz Saved transmissions. Replay uses a bounded hardware FIFO stream, with explicit confirmation and Esc cancellation.
+
 - Require kernel-managed chip select for CC1101 hats so LCD traffic cannot enter a radio transaction. Document the per-hat boot configuration.
 - Stabilize CC1101 status reads using the silicon-errata workaround and wait for RX transitions.
 - Recover transient RX exits by flushing and retuning the receiver. Show resynchronizations on Monitor and stop with an actionable error if recovery repeatedly fails.

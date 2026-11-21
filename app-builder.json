@@ -1,6 +1,6 @@
 {
   "package_name": "zerogotchi",
-  "version": "0.4.22~dev1",
+  "version": "0.4.22~dev2",
   "app_name": "Zerogotchi",
   "bin_name": "zerogotchi",
   "description": "Wi-Fi auditing and GPS Wi-Fi and BLE wardriving for the Cardputer Zero",

@@ -119,7 +119,7 @@ again before upload.
    **Sub-Ghz → Hat** and choose the attached CC1101 board.
    For the switch-selected Kasiin RF 2in1, select **Kasiin RF 2in1 v1** and
    move its physical switch to **CC1101**.
-2. Choose **Frequency**. Presets are 315, 433.92, 868, and 915 MHz. **Custom**
+2. Choose **Frequency**. Presets are 310, 315, 330, 390, 418, 430, 430.5, 433.92, 868, and 915 MHz. **Custom**
    accepts 300–348, 387–464, or 779–928 MHz. Use an antenna suited to the band.
 3. Set the **Threshold**, then select **Monitor**. The screen plots recent RSSI
    and shows current signal strength, peak level, elapsed time, and threshold
@@ -131,7 +131,32 @@ again before upload.
 
 This mode receives continuously on one selected frequency with approximately
 271 kHz filter bandwidth. RSSI is an estimated signal level. Events represent
-energy above the threshold. The mode provides no protocol decoding or recording.
+energy above the threshold. The RSSI graph does not decode protocols.
+
+### Record, save, and replay (development build)
+
+From Monitor press **R Record**. The app switches to raw **ASK/OOK** pulse
+recording at the selected frequency. Send the signal from your test remote,
+then press **R Stop recording** or **Esc**. Recording stops automatically after
+15 seconds. The RSSI threshold controls when recording starts; lower it if a
+weak signal does not trigger capture. An empty recording is reported clearly.
+
+Choose **Erase**, **Replay**, or **Save**. Erase discards an unsaved recording;
+Save keeps its frequency and signed pulse durations in a private JSON file
+under `~/.local/share/zerogotchi/subghz/`. Open **Sub-Ghz → Saved** (directly
+below Monitor) to replay or erase a saved transmission. Replay asks for
+confirmation and sends the recorded sequence once, at its saved frequency;
+**Esc** stops transmission. It uses a low-power PA setting.
+
+This is raw OOK capture, not a universal RF recorder: FSK/GFSK, encrypted and
+rolling-code systems are not reproduced by this mode. Replay timing is
+quantized to approximately 50 microseconds through the CC1101 hardware FIFO.
+Lost GPIO edges, too much noise, and FIFO underruns produce errors rather than
+silently claiming a successful recording/replay. Antenna and hat matching can
+limit performance at frequencies outside their intended band. Transmit only
+on frequencies permitted in your location and with authorized equipment.
+For a Flipper test, use **Read RAW**, the same frequency, and **AM650**;
+ordinary Read may not recognize an unknown OOK signal.
 
 ### CC1101 hat profiles
 

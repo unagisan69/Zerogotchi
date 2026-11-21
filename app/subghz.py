@@ -4,6 +4,9 @@ from collections import deque
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, replace
 import fcntl
+import json
+import os
+import secrets
 import math
 from pathlib import Path
 import re
@@ -32,11 +35,12 @@ HATS = {
     "m5-cap": Hat("M5Stack Cap CC1101", 7, inputs=(15,), outputs=((22, 1),),
                   band_switch=14, power=26),
 }
-PRESETS = (315.0, 433.92, 868.0, 915.0)
+PRESETS = (310.0, 315.0, 330.0, 390.0, 418.0, 430.0, 430.5, 433.92, 868.0, 915.0)
 BANDS = ((300.0, 348.0), (387.0, 464.0), (779.0, 928.0))
 BANDWIDTH = 270.8
 # Keep app-owned LCD writes and radio requests ordered as well as kernel-arbitrated.
 SPI_LOCK = threading.RLock()
+TX_ACTIVE = threading.Event()
 
 
 def frequency(value):
@@ -115,7 +119,7 @@ class CC1101:
         self.transfer((register, value))
 
     def strobe(self, instruction):
-        if instruction not in (0x30, 0x33, 0x34, 0x36, 0x39, 0x3A, 0x3D):
+        if instruction not in (0x30, 0x33, 0x34, 0x35, 0x36, 0x39, 0x3A, 0x3B, 0x3D):
             raise wifi.WifiError("Unsupported monitor command")
         self.transfer((instruction,))
 
@@ -212,10 +216,10 @@ class CC1101:
 
 
 @contextmanager
-def receiver(profile):
+def receiver(profile, *, edges=False):
     try:
         import gpiod
-        from gpiod.line import Direction, Value
+        from gpiod.line import Direction, Value, Edge
         from spidev import SpiDev
     except ImportError as error:
         raise wifi.WifiError("CC1101 requires python3-libgpiod and python3-spidev") from error
@@ -249,8 +253,9 @@ def receiver(profile):
                     states[pin] = pin_state(pin)
             config = {pin: gpiod.LineSettings(direction=Direction.OUTPUT,
                        output_value=Value.ACTIVE if value else Value.INACTIVE) for pin, value in outputs.items()}
-            config.update({pin: gpiod.LineSettings(direction=Direction.INPUT) for pin in hat.inputs})
-            lines = cleanup.enter_context(gpiod.request_lines("/dev/gpiochip0", consumer="zerogotchi-subghz", config=config))
+            config.update({pin: gpiod.LineSettings(direction=Direction.INPUT,
+                           edge_detection=Edge.BOTH if edges else Edge.NONE) for pin in hat.inputs})
+            lines = cleanup.enter_context(gpiod.request_lines("/dev/gpiochip0", consumer="zerogotchi-subghz", config=config, event_buffer_size=16384))
             rail = Path("/sys/class/leds/ext_5v_out/brightness")
             rail.write_text("1")
             time.sleep(0.15)
@@ -332,3 +337,192 @@ def monitor(profile, mhz, threshold, cancel, pause, report):
                 next_report = now + 0.15
             cancel.wait(0.04)
     return replace(status, phase="Stopped", elapsed=int(time.monotonic() - started))
+
+
+MAX_RECORD_US = 15_000_000
+MAX_PULSES = 100_000
+REPLAY_RATE = (256 + 147) * 2**9 * 26_000_000 / 2**28
+
+
+def validate_record(data):
+    try:
+        mhz = frequency(data['frequency'])
+        pulses = data['pulses']
+        if data['format'] != 'zerogotchi-ook-v1' or not isinstance(pulses, list):
+            raise ValueError
+        if not 2 <= len(pulses) <= MAX_PULSES:
+            raise ValueError
+        if any(type(value) is not int or value == 0 for value in pulses):
+            raise ValueError
+        if sum(abs(value) for value in pulses) > MAX_RECORD_US:
+            raise ValueError
+        if not any(value > 0 for value in pulses):
+            raise ValueError
+        return {'format': 'zerogotchi-ook-v1', 'frequency': mhz, 'pulses': pulses}
+    except (KeyError, TypeError, ValueError) as error:
+        raise wifi.WifiError('Invalid or empty OOK recording (maximum 15 seconds).') from error
+
+
+def recordings():
+    folder = wifi.DATA / 'subghz'
+    return sorted(folder.glob('*.json'), reverse=True) if folder.exists() else []
+
+
+def load_record(path):
+    try:
+        if path.stat().st_size > 2_000_000:
+            raise ValueError
+        return validate_record(json.loads(path.read_text()))
+    except (OSError, ValueError) as error:
+        raise wifi.WifiError('Could not read this OOK recording.') from error
+
+
+def save_record(data):
+    data = validate_record(data)
+    folder = wifi.DATA / 'subghz'
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    name = f"{time.strftime('%Y%m%d-%H%M%S')}_{data['frequency']:g}MHz_{secrets.token_hex(3)}.json"
+    path = folder / name
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            json.dump(data, output)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def record(profile, mhz, threshold, cancel, report):
+    """Timestamp demodulated OOK edges in the kernel; reject any lost edges."""
+    from gpiod import EdgeEvent
+    pulses = []
+    started = time.monotonic()
+    previous = None
+    level = 0
+    sequence = None
+    armed = False
+    next_report = 0
+    with receiver(profile, edges=True) as radio:
+        radio.write(0x12, 0x30)  # ASK/OOK, no sync or Manchester.
+        radio.write(0x10, 0x69)
+        radio.write(0x11, 147)
+        radio.write(0x1B, 0x07)  # OOK AGC settings.
+        radio.write(0x1C, 0x00)
+        radio.write(0x1D, 0x91)
+        radio.write(0x02, 0x0D)  # GDO0 = asynchronous demodulated data.
+        radio.tune(mhz)
+        # Discard demodulator startup transitions queued during calibration.
+        for _ in range(16):
+            if not radio.lines.wait_edge_events(timeout=0):
+                break
+            radio.lines.read_edge_events(max_events=4096)
+        while not cancel.is_set() and time.monotonic() - started < 15:
+            strength = radio.sample()
+            armed = armed or (strength is not None and strength >= threshold)
+            if radio.recoveries:
+                raise wifi.WifiError('Radio resynchronized during recording. Please record again.')
+            if radio.lines.wait_edge_events(timeout=0.01):
+                for event in radio.lines.read_edge_events(max_events=4096):
+                    if sequence is not None and event.line_seqno != sequence + 1:
+                        raise wifi.WifiError('Recording lost GPIO edges. Please record again.')
+                    sequence = event.line_seqno
+                    new_level = int(event.event_type == EdgeEvent.Type.RISING_EDGE)
+                    stamp = event.timestamp_ns // 1000
+                    if armed and previous is None and new_level:
+                        previous, level = stamp, 1
+                    elif previous is not None:
+                        duration = stamp - previous
+                        if duration > 0:
+                            pulses.append(duration if level else -duration)
+                        previous, level = stamp, new_level
+                    if len(pulses) >= MAX_PULSES:
+                        raise wifi.WifiError('Too many pulses/noise. Try a stronger, shorter signal.')
+            now = time.monotonic()
+            if now >= next_report:
+                report(f"{mhz:g} MHz · OOK\n{len(pulses)} pulses · {int(now-started)} / 15s\n"
+                       + ('Recording signal' if previous is not None else 'Waiting for signal above threshold'))
+                next_report = now + .2
+    if not pulses:
+        raise wifi.WifiError('No OOK signal captured. Check frequency, threshold and remote.')
+    # End at the last observed edge, without retaining a long idle/noise tail.
+    return validate_record({'format': 'zerogotchi-ook-v1', 'frequency': mhz, 'pulses': pulses})
+
+
+def encode_record(data):
+    """Quantize against cumulative timestamps to avoid per-pulse timing drift."""
+    data = validate_record(data)
+    result = bytearray()
+    elapsed = emitted = byte = count = 0
+    for pulse in data['pulses']:
+        elapsed += abs(pulse)
+        target = round(elapsed * REPLAY_RATE / 1_000_000)
+        for _ in range(target - emitted):
+            byte = (byte << 1) | int(pulse > 0)
+            count += 1
+            if count == 8:
+                result.append(byte)
+                byte = count = 0
+        emitted = target
+    if count:
+        result.append(byte << (8-count))
+    result.extend(b'\0\0')
+    return bytes(result)
+
+
+def replay(profile, data, cancel, report):
+    data = validate_record(data)
+    payload = encode_record(data)
+    with receiver(profile) as radio:
+        radio.tune(data['frequency'])
+        radio.strobe(0x36)
+        radio.strobe(0x3B)
+        radio.write(0x02, 0x2E)
+        radio.write(0x08, 0x02)  # FIFO, infinite length, CRC/whitening off.
+        radio.write(0x12, 0x30)  # OOK, no preamble/sync.
+        radio.write(0x10, 0x69)
+        radio.write(0x11, 147)
+        radio.write(0x22, 0x11)  # OOK PATABLE entries 0/1.
+        radio.transfer([0x7E, 0x00, 0x12])  # Off and low-power on.
+        radio.transfer([0x7F, *payload[:64]])
+        position = min(64, len(payload))
+        started = time.monotonic()
+        # LCD frames can hold the shared SPI bus longer than the TX FIFO.
+        # Suppress new frames while streaming; the UI still polls Esc normally.
+        with SPI_LOCK:
+            TX_ACTIVE.set()
+        try:
+            if cancel.is_set():
+                return 'Replay stopped.'
+            radio.strobe(0x35)
+            while not cancel.is_set():
+                # TI errata: accept only consecutive matching TXBYTES reads.
+                before = radio.read(0x3A)
+                for _ in range(8):
+                    amount = radio.read(0x3A)
+                    if before == amount:
+                        break
+                    before = amount
+                else:
+                    raise wifi.WifiError('Unstable TX FIFO status; replay stopped.')
+                if amount & 0x80:
+                    if position != len(payload):
+                        raise wifi.WifiError('Replay interrupted by FIFO underrun. Try a shorter recording.')
+                    return 'Replay complete (one transmission).'
+                remaining = amount & 0x7F
+                if remaining > 64:
+                    raise wifi.WifiError('Invalid TX FIFO status; replay stopped.')
+                if position < len(payload) and remaining <= 32:
+                    chunk = payload[position:position + 64-remaining]
+                    radio.transfer([0x7F, *chunk])
+                    position += len(chunk)
+                if time.monotonic() - started > len(payload)*8/REPLAY_RATE + 2:
+                    raise wifi.WifiError('Replay timed out; transmitter stopped.')
+                cancel.wait(.002)
+            return 'Replay stopped.'
+        finally:
+            try:
+                radio.strobe(0x36)
+                radio.strobe(0x3B)
+            finally:
+                TX_ACTIVE.clear()
