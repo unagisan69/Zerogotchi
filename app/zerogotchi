@@ -52,6 +52,13 @@ KEYS = {
     57: " ",
 }
 SHIFTED = dict(zip("1234567890-=;',./[]`", "!@#$%^&*()_+:\"<>?{}~"))
+# Dedicated Sym-layer evdev codes from the stock
+# /usr/share/keymaps/tca8418_keypad_m5stack_keymap.map.
+# These are already resolved symbols; Shift must not reinterpret them.
+SYMBOLS = dict(zip(
+    (26, 27, 39, 40, 41, 43, 51, 52, 53, 94, 55, 69, 70, 71, 72, 73,
+     74, 75, 76, 77, 79, 80, 81, 82, 83, 85, 86, 89, 90, 91, 92, 93),
+    '!@#$%^&*()~`_-+=[]{};:\'"<>\\|,./?'))
 USB_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}")
 THEMES = {"acidburn": "Acidburn", "computer": "Computer", "zero-cool": "Zero Cool"}
 LISTENING_FRAMES = {
@@ -1330,9 +1337,16 @@ class App:
         elif key == KEY_BACKSPACE:
             editor["value"] = value[:-1]
             self.update_editor()
-        elif key in KEYS and len(value) < editor["limit"]:
-            char = KEYS[key]
-            editor["value"] += SHIFTED.get(char, char.upper()) if self.shift else char
+        elif key in SYMBOLS or key in KEYS:
+            if len(value) >= editor["limit"]:
+                return
+            if key in SYMBOLS:
+                char = SYMBOLS[key]
+            else:
+                char = KEYS[key]
+                if self.shift:
+                    char = SHIFTED.get(char, char.upper())
+            editor["value"] += char
             self.update_editor()
 
     def work(self, title, prompt, operation, success, back, *, cancellable=False):

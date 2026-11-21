@@ -10,6 +10,11 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.25](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.25)
+
+- Fix the built-in Cardputer Zero Sym key mapping in all text fields, including `_`, `-`, `<`, `>`, `+`, and the remaining stock symbols. Keep letter Shift handling and field validation unchanged.
+- Add editor tests for all 32 dedicated Sym keycodes, Shift independence, input limits, deletion, and saving validated text.
+
 ## [0.4.24](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.24)
 
 - Default recording/Library actions to Replay, and default replay confirmation to Replay Once.

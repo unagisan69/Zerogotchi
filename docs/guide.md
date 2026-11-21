@@ -261,6 +261,14 @@ Counters start with this version. **Reset lifetime results** clears the
 counters for all three modes. Saved captures, surveys, and the Wardriving
 address index are retained.
 
+## Text input
+
+Use the built-in **Sym** layer to enter the blue printed symbols, including
+`_ - < > +`, punctuation, quotes, and backslashes. Zerogotchi reads the stock
+Cardputer Zero symbol keycodes directly; no system keymap or firmware change
+is needed. Shift continues to capitalize letters. Field-specific validation
+still applies when saving (for example, a numeric field does not accept text).
+
 ## Settings and dashboard
 
 | Setting | Purpose |
