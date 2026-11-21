@@ -10,6 +10,11 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.24](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.24)
+
+- Default recording/Library actions to Replay, and default replay confirmation to Replay Once.
+- Add Replay Until Cancel with Esc cancellation and an interruptible one-second gap between transmissions.
+
 ## [0.4.23](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.23)
 
 - Add Sub-Ghz Library with an explicit optional GitHub import, download/import progress, cancellation, compatibility/exclusion summaries, and a paginated SSH-manageable browser. No third-party waveforms are bundled.

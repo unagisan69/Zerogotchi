@@ -575,3 +575,20 @@ def replay(profile, data, cancel, report):
                 radio.strobe(0x3B)
             finally:
                 TX_ACTIVE.clear()
+
+
+
+def replay_until_cancel(profile, data, cancel, report):
+    """Repeat a bounded recording, keeping an interruptible one-second gap."""
+    data = validate_record(data)
+    completed = 0
+    while not cancel.is_set():
+        report(f"Replay {completed+1} · {data['frequency']:g} MHz\nEsc to stop repeating")
+        replay(profile, data, cancel, report)
+        if cancel.is_set():
+            break
+        completed += 1
+        report(f"{completed} completed · waiting 1s\nEsc to stop repeating")
+        if cancel.wait(1):
+            break
+    return f"Replay stopped. {completed} completed."

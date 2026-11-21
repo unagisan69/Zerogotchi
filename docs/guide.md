@@ -141,12 +141,13 @@ then press **R Stop recording** or **Esc**. Recording stops automatically after
 15 seconds. The RSSI threshold controls when recording starts; lower it if a
 weak signal does not trigger capture. An empty recording is reported clearly.
 
-Choose **Erase**, **Replay**, or **Save**. Erase discards an unsaved recording;
+**Replay** is selected by default. Choose **Replay**, **Save**, or **Erase**. Erase discards an unsaved recording;
 Save keeps its frequency and signed pulse durations in a private JSON file
 under `~/.local/share/zerogotchi/subghz/`. Open **Sub-Ghz → Saved** (directly
 below Monitor) to replay or erase a saved transmission. Replay asks for
-confirmation and sends the recorded sequence once, at its saved frequency;
-**Esc** stops transmission. It uses a low-power PA setting.
+confirmation with **Replay Once** selected by default. **Replay Until Cancel**
+repeats at the saved frequency with a one-second gap between transmissions.
+**Esc** stops transmission or cancels the gap immediately. It uses a low-power PA setting.
 
 This is raw OOK capture, not a universal RF recorder: FSK/GFSK, encrypted and
 rolling-code systems are not reproduced by this mode. Replay timing is
@@ -181,7 +182,7 @@ Key/protocol files, BinRAW, FSK/custom presets, oversized or malformed files,
 jamming, access-code brute-force collections, and specified safety-related
 categories are skipped. The final summary separates imported, existing,
 unsupported, and excluded files. Importing never starts the radio or replays a
-signal. Playback still requires selecting a file and confirming **Replay once**.
+signal. Playback still requires selecting a file and confirming **Replay Once** or choosing **Replay Until Cancel**.
 
 **Browse Library** preserves upstream folders and paginates large directories.
 Select a file to replay or erase it. Personal `.sub` files can also be placed

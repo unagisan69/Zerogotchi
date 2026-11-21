@@ -62,6 +62,42 @@ class Recordings(unittest.TestCase):
                     data = subghz.record('rf2-v1',315,-70,cancel,lambda _: None)
                     self.assertEqual(data['pulses'], [350,-1050])
 
+    def test_repeat_stops_during_gap_and_propagates_radio_errors(self):
+        cancel = threading.Event()
+        messages = []
+        with patch.object(subghz, 'replay', return_value='complete') as send, patch.object(cancel, 'wait', side_effect=lambda seconds: cancel.set() or True):
+            result = subghz.replay_until_cancel('rf2-v1',self.data,cancel,messages.append)
+            send.assert_called_once()
+            self.assertIn('1 completed',result)
+        cancel.clear()
+        def fail(*args): raise wifi.WifiError('radio failed')
+        with patch.object(subghz,'replay',side_effect=fail) as send:
+            with self.assertRaisesRegex(wifi.WifiError,'radio failed'):
+                subghz.replay_until_cancel('rf2-v1',self.data,cancel,messages.append)
+            send.assert_called_once()
+        cancel.set()
+        with patch.object(subghz,'replay') as send:
+            subghz.replay_until_cancel('rf2-v1',self.data,cancel,messages.append)
+            send.assert_not_called()
+
+    def test_replay_menu_defaults(self):
+        import runpy
+        app_type = runpy.run_path('app/zerogotchi')['App']
+        app = app_type.__new__(app_type)
+        app.subghz_record_result(self.data,Path('test.sub'),lambda:None)
+        self.assertEqual(app.index,0)
+        self.assertEqual([name for name,_ in app.items],['Replay','Erase'])
+        app.items[0][1]()
+        self.assertEqual(app.index,0)
+        self.assertEqual([name for name,_ in app.items],['Replay Once','Replay Until Cancel','Cancel'])
+        with patch.object(app,'work') as work,patch.object(subghz,'hat_key',return_value='rf2-v1'),patch.object(subghz,'replay_until_cancel') as repeat:
+            app.cancel=threading.Event();app.report_capture=lambda _:None
+            app.items[1][1]()
+            operation=work.call_args.args[2]
+            operation()
+            repeat.assert_called_once()
+            self.assertTrue(work.call_args.kwargs['cancellable'])
+
     def test_replay_drains_fifo_and_stops_on_cancel_or_underrun(self):
         class Radio:
             def __init__(self, counts):
