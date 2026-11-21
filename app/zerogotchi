@@ -25,6 +25,7 @@ import gnss
 import diagnostics
 import screen_idle
 import subghz
+import subghz_library
 import upload_queue
 import lifetime
 import meshmapping
@@ -173,6 +174,9 @@ class Display:
 
     def draw_auto(self, status, blink, gps_on, online, battery, theme="acidburn",
                   listening_frame=0, location=None, can_pause=False, paused=False, satellites=None):
+        if isinstance(status, subghz_library.Progress):
+            self.draw_library_progress(status)
+            return
         if isinstance(status, subghz.Status):
             self.draw_subghz(status, paused)
             return
@@ -256,6 +260,28 @@ class Display:
         draw.rectangle((304, 154, 306, 158), fill=color)
         if battery:
             draw.rectangle((283, 152, 282 + max(1, int(battery * .19)), 160), fill=color)
+        self.paint(image)
+
+    def draw_library_progress(self, status):
+        image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        draw = ImageDraw.Draw(image)
+        draw.text((12, 8), "Library import", font=self.title, fill=TEAL)
+        draw.text((12, 39), status.phase, font=self.body, fill=WHITE)
+        if status.total:
+            fraction = min(1, status.current / status.total)
+            label = f"{fraction:.0%}"
+            draw.rounded_rectangle((12, 65, 308, 84), radius=5, outline=PANEL)
+            if fraction:
+                draw.rounded_rectangle((14, 67, 14+max(2,int(292*fraction)), 82), radius=3, fill=TEAL)
+        else:
+            label = "Working…"
+            draw.rounded_rectangle((12, 65, 308, 84), radius=5, outline=PANEL)
+            offset = (status.current // 65536 if status.current else int(time.monotonic()*12)) % 230
+            draw.rounded_rectangle((14+offset, 67, 74+offset, 82), radius=3, fill=TEAL)
+        draw.text((308, 41), label, font=self.small, fill=TEAL, anchor="ra")
+        draw.text((12, 94), status.detail[:43], font=self.small, fill=WHITE)
+        draw.text((12, 116), f"Imported {status.imported} · Skipped {status.skipped}", font=self.body, fill=MUTED)
+        draw.text((12, 151), "Esc Cancel · no automatic playback", font=self.small, fill=MUTED)
         self.paint(image)
 
     def draw_subghz(self, status, paused):
@@ -426,6 +452,7 @@ class App:
         self.screen("Sub-Ghz", "CC1101 signal-strength monitor.", (
             ("Monitor", self.start_subghz),
             ("Saved", self.subghz_saved),
+            ("Library", self.subghz_library),
             (f"Hat: {subghz.HATS[profile].name}", self.subghz_hat),
             (f"Frequency: {mhz:g} MHz", self.subghz_frequency),
             (f"Threshold: {threshold} dBm", self.subghz_threshold),
@@ -502,9 +529,9 @@ class App:
             self.subghz_record_result, self.subghz, cancellable=True)
         self.footer = "R Stop recording / Esc Stop"
 
-    def subghz_record_result(self, data, path=None):
+    def subghz_record_result(self, data, path=None, return_to=None):
         duration = sum(abs(value) for value in data['pulses']) / 1_000_000
-        back = self.subghz_saved if path else self.start_subghz
+        back = return_to or (self.subghz_saved if path else self.start_subghz)
         def erase():
             try:
                 if path:
@@ -523,13 +550,13 @@ class App:
                 self.work("Replay OOK", "Transmitting once… Esc to stop.",
                           lambda: subghz.replay(subghz.hat_key(), data, self.cancel, self.report_capture),
                           lambda result: self.screen("Replay", result,
-                              back=lambda: self.subghz_record_result(data, path)),
-                          lambda: self.subghz_record_result(data, path), cancellable=True)
+                              back=lambda: self.subghz_record_result(data, path, return_to)),
+                          lambda: self.subghz_record_result(data, path, return_to), cancellable=True)
             self.screen("Replay transmission?",
                         f"{data['frequency']:g} MHz · OOK · {duration:.2f}s\n"
                         "Transmit only where permitted and with authorized equipment.",
-                        (("Cancel", lambda: self.subghz_record_result(data, path)), ("Replay once", begin)),
-                        back=lambda: self.subghz_record_result(data, path))
+                        (("Cancel", lambda: self.subghz_record_result(data, path, return_to)), ("Replay once", begin)),
+                        back=lambda: self.subghz_record_result(data, path, return_to))
         self.screen("Saved OOK" if path else "Recording stopped",
                     f"{data['frequency']:g} MHz · {duration:.2f}s · {len(data['pulses'])} pulses",
                     (("Erase", erase), ("Replay", replay)) + (() if path else (("Save", save),)), back=back)
@@ -543,6 +570,49 @@ class App:
         paths = subghz.recordings()
         self.screen("Saved transmissions", "" if paths else "No saved OOK recordings.",
                     tuple((path.stem, lambda path=path: open_record(path)) for path in paths), back=self.subghz)
+
+    def subghz_library(self):
+        self.screen("Library", "Import compatible files from GitHub?\nRAW OOK only; source download may exceed 170 MB.",
+                    (("Import from GitHub", self.subghz_library_import),
+                     ("Browse Library", self.subghz_library_browse),
+                     ("Not now", self.subghz)), back=self.subghz)
+
+    def subghz_library_import(self):
+        def done(counts):
+            self.screen("Library imported", f"{counts.get('imported',0)} imported · {counts.get('existing',0)} existing\n"
+                        f"{counts.get('unsupported',0)} unsupported · {counts.get('excluded',0)} excluded",
+                        (("Browse Library", self.subghz_library_browse),), back=self.subghz_library)
+        self.work("Library import", "Connecting to Zero-Sploit / FlipperZero-Subghz-DB…",
+                  lambda: subghz_library.download_import(self.cancel, self.report_capture),
+                  done, self.subghz_library, cancellable=True)
+        self.auto_status = subghz_library.Progress()
+
+    def subghz_library_browse(self, folder=None, page=0):
+        try:
+            root = subghz_library.root()
+            folder = root if folder is None else Path(folder)
+            paths = subghz_library.entries(folder)
+        except (OSError, wifi.WifiError) as error:
+            self.screen("Library", str(error), back=self.subghz_library)
+            return
+        page = min(max(0,page), max(0,(len(paths)-1)//80))
+        here = lambda: self.subghz_library_browse(folder, page)
+        def open_file(path):
+            if path.is_dir():
+                self.subghz_library_browse(path)
+                return
+            try:
+                self.subghz_record_result(subghz.load_record(path), path, here)
+            except (OSError, wifi.WifiError) as error:
+                self.screen("Library file", f"{path.name}\n{error}", back=here)
+        items = tuple((("[+] " if path.is_dir() else "") + path.name,
+                       lambda path=path: open_file(path)) for path in paths[page*80:(page+1)*80])
+        if page:
+            items += (("Previous page", lambda: self.subghz_library_browse(folder,page-1)),)
+        if (page+1)*80 < len(paths):
+            items += (("Next page", lambda: self.subghz_library_browse(folder,page+1)),)
+        self.screen("Library files", f"{len(paths)} entries · page {page+1}" if paths else "No Library files. Import or add via SSH.",
+                    items, back=self.subghz_library if folder == root else lambda: self.subghz_library_browse(folder.parent))
 
     def diagnostics(self):
         def show(results):
@@ -1300,7 +1370,9 @@ class App:
                 self.dirty = True
             elif self.cancellable and code == KEY_ESC:
                 self.cancel.set()
-                if isinstance(self.auto_status, wigle.WardriveStatus):
+                if isinstance(self.auto_status, subghz_library.Progress):
+                    self.screen("Cancelling import", "Keeping completed files…", footer="Please wait")
+                elif isinstance(self.auto_status, wigle.WardriveStatus):
                     self.screen("Stopping Wardriving", "Finishing the current scan…", footer="Please wait")
                 elif isinstance(self.auto_status, subghz.Status):
                     self.screen("Stopping Monitor", "Putting the CC1101 to sleep…", footer="Please wait")
@@ -1395,7 +1467,7 @@ class App:
                         self.screen("Zerogotchi", "Could not read or save app data.", back=self.failed)
                 if self.future and not self.cancel.is_set():
                     update = self.capture_update
-                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus, meshmapping.Status, subghz.Status)) and update != self.auto_status:
+                    if isinstance(update, (wifi.AutoStatus, wifi.AttackStatus, wigle.WardriveStatus, meshmapping.Status, subghz.Status, subghz_library.Progress)) and update != self.auto_status:
                         self.auto_status, self.dirty = update, True
                     elif isinstance(update, str) and update != self.message:
                         self.message, self.dirty = update, True
@@ -1437,7 +1509,8 @@ class App:
                         self.poll_survey(now)
                 if self.screen_idle.sleeping:
                     pass
-                elif self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame):
+                elif self.auto_status and (self.dirty or blink != last_blink or listening_frame != last_listening_frame
+                                          or isinstance(self.auto_status, subghz_library.Progress) and now-last_paint >= .2):
                     self.display.draw_auto(self.auto_status, blink, self.gps_on, self.online,
                                            self.battery, self.theme, listening_frame, self.wardrive_location,
                                            can_pause=bool(self.future) and isinstance(

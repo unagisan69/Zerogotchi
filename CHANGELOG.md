@@ -10,6 +10,11 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.23](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.23)
+
+- Add Sub-Ghz Library with an explicit optional GitHub import, download/import progress, cancellation, compatibility/exclusion summaries, and a paginated SSH-manageable browser. No third-party waveforms are bundled.
+- Read Flipper RAW OOK270/OOK650 `.sub` files from Saved and Library, using existing bounded replay.
+
 ## [0.4.22](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.22)
 
 - Add 310, 330, 390, 418, 430, and 430.5 MHz presets.

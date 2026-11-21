@@ -365,16 +365,65 @@ def validate_record(data):
 
 def recordings():
     folder = wifi.DATA / 'subghz'
-    return sorted(folder.glob('*.json'), reverse=True) if folder.exists() else []
+    return sorted((p for p in folder.iterdir() if p.is_file() and not p.is_symlink()
+                   and p.suffix.lower() in ('.json', '.sub')), reverse=True) if folder.exists() else []
 
 
 def load_record(path):
     try:
         if path.stat().st_size > 2_000_000:
-            raise ValueError
-        return validate_record(json.loads(path.read_text()))
-    except (OSError, ValueError) as error:
+            raise wifi.WifiError('File exceeds the 2 MB recording limit.')
+        text = path.read_text(encoding='utf-8-sig')
+        return parse_flipper_raw(text) if path.suffix.lower() == '.sub' else validate_record(json.loads(text))
+    except (OSError, ValueError, UnicodeError) as error:
         raise wifi.WifiError('Could not read this OOK recording.') from error
+
+
+def parse_flipper_raw(text):
+    fields, pulses = {}, []
+    duration = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        key, sep, value = line.partition(':')
+        if not sep:
+            raise wifi.WifiError('Invalid Flipper Field: Value line.')
+        key, value = key.strip(), value.strip()
+        if key == 'RAW_Data':
+            try:
+                batch = [int(part) for part in value.split()]
+                duration += sum(map(abs, batch))
+                if duration > MAX_RECORD_US:
+                    raise wifi.WifiError('Flipper recording exceeds the 15-second replay limit.')
+                pulses.extend(batch)
+            except ValueError as error:
+                raise wifi.WifiError('Invalid RAW_Data pulse duration.') from error
+            if len(pulses) > MAX_PULSES:
+                raise wifi.WifiError('Too many Flipper pulses.')
+        else:
+            if key in fields:
+                raise wifi.WifiError('Duplicate Flipper header.')
+            fields[key] = value
+            if key == 'Filetype' and value != 'Flipper SubGhz RAW File':
+                raise wifi.WifiError('Supported: Flipper RAW version 1, not protocol key files.')
+            if key == 'Preset' and value not in ('FuriHalSubGhzPresetOok270Async', 'FuriHalSubGhzPresetOok650Async'):
+                raise wifi.WifiError('Only OOK270/OOK650 presets are supported, not FSK/custom presets.')
+            if key == 'Protocol' and value != 'RAW':
+                raise wifi.WifiError('Only RAW OOK files are supported, not BinRAW or protocol keys.')
+    if fields.get('Filetype') != 'Flipper SubGhz RAW File' or fields.get('Version') != '1':
+        raise wifi.WifiError('Supported: Flipper RAW version 1, not protocol key files.')
+    if fields.get('Protocol') != 'RAW':
+        raise wifi.WifiError('Only RAW OOK files are supported, not BinRAW or protocol keys.')
+    if fields.get('Preset') not in ('FuriHalSubGhzPresetOok270Async', 'FuriHalSubGhzPresetOok650Async'):
+        raise wifi.WifiError('Only OOK270/OOK650 presets are supported, not FSK/custom presets.')
+    try:
+        hz = int(fields['Frequency'])
+        if hz <= 0:
+            raise ValueError
+    except (KeyError, ValueError) as error:
+        raise wifi.WifiError('Flipper file needs a frequency in Hz.') from error
+    return validate_record({'format': 'zerogotchi-ook-v1', 'frequency': hz/1_000_000, 'pulses': pulses})
 
 
 def save_record(data):

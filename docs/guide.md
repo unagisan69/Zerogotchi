@@ -158,6 +158,50 @@ on frequencies permitted in your location and with authorized equipment.
 For a Flipper test, use **Read RAW**, the same frequency, and **AM650**;
 ordinary Read may not recognize an unknown OOK signal.
 
+### Optional Library
+
+Open **Sub-Ghz → Library**, directly below Saved. The app asks whether to
+**Import from GitHub**, **Browse Library**, or **Not now**. Nothing downloads
+until you select Import. The source is
+[Zero-Sploit/FlipperZero-Subghz-DB](https://github.com/Zero-Sploit/FlipperZero-Subghz-DB/tree/main/subghz).
+No third-party signal files are bundled with the app or stored in this GitHub
+repository. Upstream does not specify a license; its files remain separate
+from Zerogotchi's MIT-licensed code and artwork.
+
+The download can exceed 170 MB. The app requires 768 MB of free space and caps
+the compressed archive at 256 MB. It displays a percentage when GitHub supplies
+a download size; otherwise the moving progress bar shows bytes received.
+The import stage shows progress and imported/skipped counts. **Esc** cancels,
+removes the temporary download, and keeps already completed imports. Retrying
+skips existing files and never overwrites your SSH-added or edited recordings.
+
+Only Flipper **RAW version 1**, **OOK270/OOK650**, supported CC1101 frequencies,
+and recordings within the existing 15-second/100,000-pulse limits are imported.
+Key/protocol files, BinRAW, FSK/custom presets, oversized or malformed files,
+jamming, access-code brute-force collections, and specified safety-related
+categories are skipped. The final summary separates imported, existing,
+unsupported, and excluded files. Importing never starts the radio or replays a
+signal. Playback still requires selecting a file and confirming **Replay once**.
+
+**Browse Library** preserves upstream folders and paginates large directories.
+Select a file to replay or erase it. Personal `.sub` files can also be placed
+here or in the ordinary Saved recordings directory. Unsupported files show an
+explanation when opened. Replay retains the approximately 50-microsecond timing
+resolution described above.
+
+To manage the Library over SSH (replace the host/user if needed):
+
+```sh
+ssh unagi@zero2.local 'mkdir -p ~/.local/share/zerogotchi/subghz/library/My_Remotes'
+scp My_Remote.sub unagi@zero2.local:.local/share/zerogotchi/subghz/library/My_Remotes/
+ssh unagi@zero2.local 'rm ~/.local/share/zerogotchi/subghz/library/My_Remotes/My_Remote.sub'
+```
+
+Reopen the folder in the app to refresh its listing. Imported files live under
+`~/.local/share/zerogotchi/subghz/library/Zero-Sploit/`. If `XDG_DATA_HOME` is
+configured, the Library follows that location instead. Changes to the source
+collection, compatibility filters, or file formats can change import totals.
+
 ### CC1101 hat profiles
 
 These are **Cardputer Zero GPIO numbers**, translated through the EXT header.
