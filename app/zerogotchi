@@ -749,6 +749,9 @@ class App:
                       self.wardrive_done, self.wardriving, cancellable=True)
             self.auto_status = wigle.WardriveStatus("Scanning")
 
+        if gnss.source_key() == "grove":
+            authenticate("")
+            return
         self.edit("Cardputer user password", "Enter your Cardputer login password to power GPS.",
                   re.compile(r"[ -~]{1,256}"), 256, authenticate, self.wardriving, masked=True)
 
@@ -796,7 +799,7 @@ class App:
 
     def start_meshmapping(self):
         region = self.mesh_region_key()
-        monitor = gnss.GnssMonitor(wifi.HELPER, "", enable_power=False)
+        monitor = gnss.GnssMonitor(wifi.HELPER, "", enable_power=gnss.source_key() == "grove")
         self.gnss = monitor
         self.wardrive_location = None
         self.work("Meshmapping", "",
@@ -1079,6 +1082,7 @@ class App:
             (f"Theme: {THEMES[self.theme]}", self.select_theme),
             (f"Wardriving Adapter: {wifi.read_setting('wardriving-adapter') or 'Built-in'}", self.wardrive_adapter),
             (f"WiFi Adapter: {'Built-in' if adapter == 'wlan0' else adapter or 'unset'}", self.adapter),
+            (f"GPS Source: {gnss.SOURCES[gnss.source_key()]}", self.gps_source),
             (f"OnlineHashCrack API key: {'set' if is_set else 'unset'}", self.api_key),
             (f"SSID block list: {exclusions}",
              lambda: self.edit_ssid_list("SSID block list", "ssid-blacklist")),
@@ -1088,6 +1092,32 @@ class App:
             (f"WiGLE: {'credentials saved' if wigle.credentials() else 'not configured'}", self.wigle_settings),
             (f"WDG Wars: {'key saved' if wdgwars.credentials() else 'not configured'}", self.wdgwars_settings),
         ), back=self.home)
+
+    def gps_source(self):
+        def save(source):
+            try:
+                wifi.save_setting("gps-source", source)
+            except OSError:
+                self.screen("GPS Source", "Could not save GPS source.", back=self.gps_source)
+                return
+            self.settings()
+        self.screen("GPS Source", "115200 baud · 8N1. Use one UART GPS at a time.",
+                    tuple((name, lambda key=key: save(key)) for key,name in gnss.SOURCES.items())
+                    + (("Check GPS", self.gps_check),),
+                    back=self.settings)
+        self.index = tuple(gnss.SOURCES).index(gnss.source_key())
+
+    def gps_check(self):
+        def start(password):
+            self.work("Check GPS", "Configuring the selected GPS…",
+                      lambda: gnss.check(wifi.HELPER, password, self.cancel, self.report_capture),
+                      lambda result: self.screen("GPS check", result, back=self.gps_source),
+                      self.gps_source, cancellable=True)
+        if gnss.source_key() == "grove":
+            start("")
+        else:
+            self.edit("Cardputer user password", "Enter your Cardputer login password to power GPS.",
+                      re.compile(r"[ -~]{1,256}"), 256, start, self.gps_source, masked=True)
 
     def select_theme(self):
         self.screen("Theme", items=tuple(
@@ -1388,7 +1418,9 @@ class App:
                 self.dirty = True
             elif self.cancellable and code == KEY_ESC:
                 self.cancel.set()
-                if self.title == "Replay OOK":
+                if self.title == "Check GPS":
+                    self.screen("Stopping GPS check", "Restoring the GPS port…", footer="Please wait")
+                elif self.title == "Replay OOK":
                     self.screen("Stopping replay", "Stopping the transmitter…", footer="Please wait")
                 elif isinstance(self.auto_status, subghz_library.Progress):
                     self.screen("Cancelling import", "Keeping completed files…", footer="Please wait")

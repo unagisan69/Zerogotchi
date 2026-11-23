@@ -45,6 +45,7 @@ def snapshot():
     bt = command(["bluetoothctl", "show"])
     results.append(("Bluetooth", "powered on" if "Powered: yes" in bt else "off or unavailable"))
     results.append(("Internet", "online" if upload_queue.online() else "offline or limited"))
+    results.append(("GPS source", gnss.SOURCES[gnss.source_key()]))
     monitor = gnss.GnssMonitor(wifi.HELPER, "", enable_power=False)
     receiving = False
     try:
@@ -53,7 +54,7 @@ def snapshot():
             receiving |= monitor.poll(time.monotonic())
             time.sleep(0.1)
         now = time.monotonic()
-        results.append(("GNSS", "receiving NMEA" if receiving else "no recent NMEA; check cap power"))
+        results.append(("GNSS", "receiving NMEA" if receiving else monitor.error or "no recent NMEA; start a session to power the selected GPS"))
         satellites = monitor.satellites(now)
         results.append(("GPS satellites", str(satellites) if satellites is not None else "unknown"))
         results.append(("GPS fix", "current" if monitor.position(now) else "waiting"))

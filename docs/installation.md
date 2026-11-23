@@ -28,7 +28,7 @@ Download the package and checksum from the same release tag. Set `tag` to
 the version shown on the release page.
 
 ```sh
-tag=v0.4.25
+tag=v0.4.26
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/zerogotchi_all.deb"
 curl -fLO "https://github.com/unagisan69/Zerogotchi/releases/download/$tag/SHA256SUMS.txt"
 sha256sum -c SHA256SUMS.txt
@@ -50,9 +50,12 @@ select **wlan1** for the usual USB adapter or **Custom** to enter a different
 interface. The installed stock driver for the built-in Wi-Fi adapter supports
 scanning and lacks monitor mode.
 
-For GPS-tagged observations, attach the stock-compatible GNSS HAT. A lit
-satellite icon means the HAT is sending valid NMEA. Wardriving displays a
-position when the receiver has obtained a fix.
+For GPS-tagged observations, use the GNSS HAT/Cap or the M5Stack GPS/BDS
+Unit v1.1 (`U032-V11`) connected to Grove. Choose **Settings → GPS Source**,
+then **Check GPS**. See the [Grove wiring and shared-UART notes](guide.md#grove-gps-unit-v11).
+A lit satellite icon means the selected receiver is sending valid NMEA;
+coordinates require a current fix. Stock `dialout` and `gpio` group access
+is required, as on the normal Cardputer user account.
 
 ## Troubleshooting
 
@@ -60,7 +63,7 @@ position when the receiver has obtained a fix.
 | --- | --- |
 | Auto skips many access points | Open **Auto WiFi Attack → Session log** for each skip reason. Saved hashes, hidden SSIDs, block-list entries, incompatible security, and unsupported channels all affect eligibility. |
 | Monitor mode fails to start | Check that the selected USB adapter is disconnected from Wi-Fi. Zerogotchi attempts one reset for the supported RTL8821CU device `0bda:c811`. If that fails, reconnect the adapter and retry. |
-| Satellite icon is lit, but coordinates are blank | The HAT is communicating. Give the receiver time and a clear view of the sky to acquire a fix. |
+| Satellite icon is lit, but coordinates are blank | The selected GPS is communicating. Give the receiver time and a clear view of the sky to acquire a fix. |
 | A survey is absent from WiGLE | Select it under **Wardriving → Saved surveys**, confirm upload, and check WiGLE’s upload history. Accepted uploads may wait for processing. |
 
 ## Build from source

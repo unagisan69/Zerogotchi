@@ -10,6 +10,12 @@ version heading when publishing a release.
 
 ## Unreleased
 
+## [0.4.26](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.26)
+
+- Add Settings → GPS Source for the existing GNSS HAT/Cap and M5Stack GPS/BDS Unit v1.1 (U032-V11) on Grove. Configure 115200 8N1, UART routing, and Grove 5V power; restore original Grove controls and serial settings on exit.
+- Add a bounded Check GPS option, source-aware diagnostics, UART session locking, and Grove setup/rollback tests. Grove GPS uses stock gpio/dialout permissions without new privileged services or system configuration changes.
+- Verified Grove control switching and serial fixtures on a Cardputer Zero. The U032-V11 itself was not available for a physical reception/fix test.
+
 ## [0.4.25](https://github.com/unagisan69/Zerogotchi/releases/tag/v0.4.25)
 
 - Fix the built-in Cardputer Zero Sym key mapping in all text fields, including `_`, `-`, `<`, `>`, `+`, and the remaining stock symbols. Keep letter Shift handling and field validation unchanged.

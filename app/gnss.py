@@ -1,6 +1,7 @@
-"""Observe the stock Cardputer GNSS UART during an Auto session."""
+"""Receive NMEA from the Cap or Grove GPS on the stock Cardputer UART."""
 
 import os
+import fcntl
 from pathlib import Path
 import re
 import subprocess
@@ -8,10 +9,24 @@ import termios
 import tty
 from dataclasses import dataclass
 import math
+import time
+
+import wifi
 
 
 PORT = Path("/dev/serial0")
+CMDLINE = Path("/proc/cmdline")
 RAIL = Path("/sys/class/leds/ext_5v_out/brightness")
+GROVE_POWER = Path("/sys/class/leds/grove_5v_out/brightness")
+GROVE_ROUTE = Path("/sys/class/leds/grove_fun/brightness")
+SOURCES = {"cap": "GNSS HAT / Cap", "grove": "Grove GPS v1.1 (U032-V11)"}
+
+
+def source_key():
+    value = wifi.read_setting("gps-source") or "cap"
+    return value if value in SOURCES else "cap"
+
+
 SENTENCE = re.compile(rb"^\$[A-Z]{2}(?:GGA|GLL|GNS|GSA|GSV|RMC|VTG|ZDA),[^*]*\*[0-9A-Fa-f]{2}$")
 
 
@@ -75,33 +90,63 @@ def parse_satellites(line):
 
 
 class GnssMonitor:
-    def __init__(self, helper, password, *, enable_power=True):
+    def __init__(self, helper, password, *, enable_power=True, source=None):
         self.fd = self.saved = self.power = None
+        self.source = source if source in SOURCES else source_key()
+        self.controls = []
+        self.error = ""
         self.partial = b""
         self.last_seen = float("-inf")
         self.fix = None
         self.in_view = {}
         try:
-            if not PORT.exists() or not RAIL.exists():
+            if not PORT.exists():
+                self.error = "GPS UART unavailable (/dev/serial0)."
                 return
             device = PORT.resolve()
-            boot = Path("/proc/cmdline").read_text().split()
+            boot = CMDLINE.read_text().split()
             if any(option.split(",")[0] in ("console=serial0", f"console={device.name}") for option in boot):
+                self.error = "GPS UART is used by the serial console."
                 return
             self.fd = os.open(device, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self.error = "GPS UART is already in use by another Zerogotchi session."
+                self.close()
+                return
             self.saved = termios.tcgetattr(self.fd)
             tty.setraw(self.fd)
             mode = termios.tcgetattr(self.fd)
+            # Explicit 115200 8N1, local receiver, no hardware/software flow control.
+            mode[2] &= ~(termios.CSIZE | termios.PARENB | termios.PARODD | termios.CSTOPB
+                         | getattr(termios, "CRTSCTS", 0))
+            mode[2] |= termios.CS8 | termios.CLOCAL | termios.CREAD
+            mode[0] &= ~(termios.IXON | termios.IXOFF | getattr(termios, "IXANY", 0))
             mode[4] = mode[5] = termios.B115200
             termios.tcsetattr(self.fd, termios.TCSANOW, mode)
-            if enable_power and RAIL.read_text().strip() == "0":
+            if self.source == "grove":
+                settings = ((GROVE_ROUTE, "0"), (GROVE_POWER, "1"))
+                original = [(path, path.read_text().strip(), wanted) for path, wanted in settings]
+                if any(not value.isdecimal() or not 0 <= int(value) <= 255 for _, value, _ in original):
+                    raise OSError("Invalid Grove control state")
+                if not enable_power and any(bool(int(value)) != bool(int(wanted)) for _, value, wanted in original):
+                    self.error = "Grove GPS inactive: UART mode and Grove 5V power are required."
+                    self.close()
+                    return
+                for path, value, wanted in original:
+                    if bool(int(value)) != bool(int(wanted)):
+                        path.write_text(wanted)
+                        self.controls.append((path, value))
+            elif enable_power and RAIL.exists() and RAIL.read_text().strip() == "0":
                 self.power = subprocess.Popen(
                     ["sudo", "-Sk", "-p", "", "--", helper, "gnss"],
                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
                 self.power.stdin.write(password.encode() + b"\n")
                 self.power.stdin.flush()
-        except (OSError, termios.error):
+        except (OSError, termios.error) as error:
+            self.error = f"GPS access failed: {error}"
             self.close()
 
     def poll(self, now):
@@ -142,6 +187,13 @@ class GnssMonitor:
         return fresh[b"GN"] if b"GN" in fresh else sum(fresh.values())
 
     def close(self):
+        # Restore only controls we changed, in reverse order (power, then mux).
+        for path, value in reversed(self.controls):
+            try:
+                path.write_text(value)
+            except OSError:
+                self.error = "Could not restore a Grove control; check GPS port settings."
+        self.controls.clear()
         if self.fd is not None:
             try:
                 if self.saved is not None:
@@ -162,3 +214,30 @@ class GnssMonitor:
                 # EOF still releases the rail when the helper finishes starting.
                 pass
             self.power = None
+
+
+
+def check(helper, password, cancel, report):
+    """Bounded foreground check, powering only the selected GPS for its lifetime."""
+    monitor = GnssMonitor(helper, password)
+    try:
+        deadline = time.monotonic() + 6
+        while monitor.fd is not None and not cancel.is_set() and time.monotonic() < deadline:
+            now = time.monotonic()
+            receiving = monitor.poll(now)
+            report("Receiving NMEA…" if receiving else "Waiting for NMEA…")
+            cancel.wait(.2)
+        now = time.monotonic()
+        active = now - monitor.last_seen < 5
+        fix = monitor.position(now)
+        satellites = monitor.satellites(now)
+        lines = [SOURCES[monitor.source], "115200 baud · 8N1",
+                 "NMEA: receiving" if active else "NMEA: no recent data",
+                 f"Satellites: {satellites if satellites is not None else 'unknown'}",
+                 "Fix: current" if fix else "Fix: waiting"]
+        if monitor.error:
+            lines = [SOURCES[monitor.source], monitor.error]
+        result = "\n".join(lines)
+    finally:
+        monitor.close()
+    return "\n".join([SOURCES[monitor.source], monitor.error]) if monitor.error else result

@@ -74,7 +74,7 @@ OnlineHashCrack tasks stay available.
 ## Wardriving
 
 1. Select **Wardriving → Start** and enter your Cardputer user password to
-   power GPS.
+   power GPS. Grove GPS uses the normal gpio permissions and skips this password prompt.
 2. Watch Wi-Fi detections from the latest scan, new Wi-Fi and Bluetooth LE
    addresses saved this session, satellites in view, and your latest latitude
    and longitude. Previously logged BSSIDs still count as seen. A stale position is labeled **Last GPS fix**.
@@ -261,6 +261,58 @@ Counters start with this version. **Reset lifetime results** clears the
 counters for all three modes. Saved captures, surveys, and the Wardriving
 address index are retained.
 
+## Grove GPS Unit v1.1
+
+Zerogotchi supports the **M5Stack GPS/BDS Unit v1.1**, SKU **U032-V11**,
+using the stock Cardputer Zero HY2.0-4P Grove port. Select
+**Settings → GPS Source → Grove GPS v1.1 (U032-V11)**. The existing
+**GNSS HAT / Cap** profile remains the default after an upgrade.
+
+Connect it using the standard four-wire Grove cable:
+
+| Wire | Unit GPS v1.1 | Cardputer Zero host |
+| --- | --- | --- |
+| Black | GND | GND |
+| Red | 5 V power | Grove 5 V output |
+| Yellow | Unit UART RX | Host UART TX, GPIO14 |
+| White | Unit UART TX | Host UART RX, GPIO15 |
+
+The module uses **115200 baud, 8N1**, **3.3 V UART logic**, and **5 V power**.
+The stock UART is `/dev/serial0`; the app receives NMEA and does not send
+module configuration or firmware commands. Grove UART selection is
+`grove_fun=0`, and its power is enabled through `grove_5v_out`. The driver can
+report an enabled control as `255`; the app accepts both `1` and `255` as on.
+
+Choose **Check GPS** to temporarily enable the selected receiver and check
+for NMEA, satellites in view, and a current position. The check lasts about
+six seconds; **Esc** cancels it. No fix during that check is normal for a cold
+receiver or indoors. Give the antenna a clear view of the sky and use a longer
+Wardriving session to acquire a fix. A lit satellite icon means valid NMEA,
+not necessarily a usable position. Diagnostics also shows the selected source
+and explains inactive Grove power or unavailable UART access.
+
+The Grove source uses the stock user's `gpio` and `dialout` access without a
+sudo prompt. Its original Grove power/mux and UART settings are restored when
+leaving the session, including setup failure and Check GPS cancellation. It
+does not change the Cap's external power rail. Auto still asks for the user
+password for its existing Wi-Fi radio operations.
+
+**The Grove and EXT GPS connections share GPIO14/15 and the same UART.**
+Use one GPS transmitter at a time. Do not connect the Grove GPS while an attached
+HAT/Cap is also driving that UART. The app cannot electrically isolate competing
+senders. In particular, keep the Cap GPS profile when using the stock LoRa Cap's
+built-in GNSS. The Grove port is reserved for UART while this profile is active,
+so a Grove I²C peripheral cannot use that connector concurrently. An active
+serial console is left untouched and reported as unavailable.
+
+Validation covers the actual Cardputer Zero Grove controls and UART settings,
+plus checksum-validated simulated NMEA fixes/satellites through a pseudoterminal.
+The U032-V11 module itself was not available for an end-to-end hardware/fix test.
+
+Pinout and default UART references:
+[M5Stack Unit GPS v1.1](https://docs.m5stack.com/en/unit/Unit_GPS_v1.1),
+[Cardputer Zero Grove routing](https://docs.m5stack.com/en/CardputerZero#hy2.0-4p).
+
 ## Text input
 
 Use the built-in **Sym** layer to enter the blue printed symbols, including
@@ -276,6 +328,7 @@ still applies when saving (for example, a numeric field does not accept text).
 | **Theme** | Choose the default Acidburn portraits, the animated Computer face, or Zero Cool. The setting applies to Auto and Wardriving. |
 | **WiFi Adapter** | Set the radio for Auto and Manual WiFi Attack. |
 | **Wardriving Adapter** | Choose the Wardriving interface independently. |
+| **GPS Source** | Choose GNSS HAT/Cap (default) or Grove GPS v1.1 (U032-V11), then Check GPS to test NMEA input, satellites, and fix status. |
 | **SSID allow list** | Enter case-sensitive, comma-separated SSIDs for Auto WiFi Attack and Wardriving. Quote names containing commas. Leave empty to discover all Wi-Fi names. The block list takes precedence. The Wi-Fi radio may still hear other broadcasts. Bluetooth LE observations use addresses and have no SSID. |
 | **SSID block list** | Enter case-sensitive, comma-separated SSIDs. Quote a name that contains commas. With a block list enabled, hidden SSIDs are excluded when their names cannot be checked. |
 | **Private Zones** | Add GPS circles where survey recording pauses. |
@@ -286,8 +339,9 @@ still applies when saving (for example, a numeric field does not accept text).
 The satellite indicator lights after valid GNSS data arrives, the globe reflects
 NetworkManager's internet check, and the battery fill uses the stock gauge.
 The satellite indicator can light before a fix is available. When the app
-powers the stock external 5 V rail for GNSS, it restores the rail when you
-leave the mode.
+powers the stock external 5 V rail for the HAT, it restores the rail when you
+leave the mode. The Grove profile instead uses the Grove power and UART selector,
+restoring their original states when the GPS session ends.
 
 ## OnlineHashCrack
 

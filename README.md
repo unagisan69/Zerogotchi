@@ -56,7 +56,7 @@ See [installation and troubleshooting](docs/installation.md) for hardware, check
 | **[Themes and status](docs/guide.md#settings-and-dashboard)** | Choose Acidburn, Computer, or Zero Cool for Auto WiFi Attack, Manual WiFi Attack, and Wardriving. Dashboard indicators use the Cardputer’s live status. Display sleep follows APPLaunch DarkTime. |
 | **[In-app updates](docs/installation.md#install-or-upgrade)** | Check automatically on launch or from the main menu. Install a verified release with visible progress and automatic restart. |
 
-The **built-in Wi-Fi adapter** supports scanning and Wardriving on the stock driver. **Capture and deauth** require a USB adapter that supports monitor mode and, for deauth, injection. **GPS-tagged surveys** require a GNSS HAT with a position fix.
+The **built-in Wi-Fi adapter** supports scanning and Wardriving on the stock driver. **Capture and deauth** require a USB adapter that supports monitor mode and, for deauth, injection. **GPS-tagged surveys** require a receiver with a position fix: the GNSS HAT/Cap or [M5Stack GPS/BDS Unit v1.1 on Grove](docs/guide.md#grove-gps-unit-v11). Select it under **Settings → GPS Source**.
 
 Use Auto and Manual WiFi Attack only on networks and equipment you own or are authorized to test. The optional [wifit3 companion](docs/companion.md) provides additional lab methods, including active PMKID association, WPS recovery, WEP, and experimental WPA3 downgrade.
 
